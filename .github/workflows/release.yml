@@ -37,10 +37,14 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install Android SDK 36
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | head -n 1)
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Prepare signing key
         if: startsWith(github.ref, 'refs/tags/')
