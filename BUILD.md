@@ -1,0 +1,63 @@
+# Building DLA
+
+## Prerequisites
+
+- JDK 17+ (JDK 21 tested)
+- Android SDK Platform 36, Build Tools 35+
+- Node.js 20+ and pnpm
+- Gradle is provided by the wrapper (`android/gradlew`)
+
+## 1. Build the web UI
+
+```bash
+cd web
+pnpm install
+pnpm typecheck
+pnpm build
+```
+
+`web/dist/` is generated and ignored by Git.
+
+## 2. Build Android
+
+```bash
+cd ../android
+./gradlew assembleDebug
+```
+
+The Gradle task `syncWebAssets` copies `web/dist` into
+`android/app/src/main/assets/public` before packaging.
+
+For a release build, provide a signing key outside the repository:
+
+```bash
+cd android
+cat > ../keystore/keystore.properties <<'EOF'
+storeFile=../keystore/dla-release.jks
+storePassword=...
+keyAlias=dla
+keyPassword=...
+EOF
+./gradlew assembleRelease
+```
+
+`keystore/` is ignored. Never commit a JKS or its passwords.
+
+## Windows notes
+
+The project path must not contain characters that break the Android toolchain. Prefer a short ASCII path such as `C:\src\dla`. The repository itself is path-agnostic; the old private build used a non-ASCII workspace and required a junction for the SDK.
+
+## Outputs
+
+- Debug: `android/app/build/outputs/apk/debug/app-debug.apk`
+- Release: `android/app/build/outputs/apk/release/app-release.apk`
+
+## Verification
+
+```bash
+# package id / version
+aapt2 dump badging app-release.apk | head
+
+# signature
+apksigner verify --print-certs app-release.apk
+```

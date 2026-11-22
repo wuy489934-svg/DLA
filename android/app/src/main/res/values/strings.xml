@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DLA</string>
+    <string name="no_browser">没有可用的浏览器</string>
+    <string name="saved_to_downloads">已保存到下载目录：%1$s</string>
+    <string name="save_failed">保存失败</string>
+    <string name="open_failed">无法打开该文件</string>
+    <string name="microphone_denied">没有麦克风权限，无法录音</string>
+    <string name="add_attachment">添加附件</string>
+    <string name="action_camera">拍照</string>
+    <string name="action_gallery">从相册选择</string>
+    <string name="action_files">选择文件</string>
+    <string name="camera_unavailable">无法打开相机</string>
+    <string name="agent_channel_name">Agent 运行</string>
+    <string name="agent_channel_description">Agent 调用工具时在后台保持运行</string>
+    <string name="agent_notification_title">Agent 正在执行任务</string>
+    <string name="agent_notification_text">切到后台也会继续，完成后回到应用查看结果</string>
+    <string name="agent_notification_stop">停止任务</string>
+    <string name="accessibility_description">让 Agent 在进程内读取当前屏幕控件，用于自动化操作</string>
+    <string name="shizuku_granted">Shizuku 权限已授予</string>
+    <string name="shizuku_denied">Shizuku 权限被拒绝</string>
+    <string name="shizuku_not_installed">未安装 Shizuku</string>
+</resources>

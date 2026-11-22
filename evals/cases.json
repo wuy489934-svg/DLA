@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "name": "dla-agent-tool-evals",
+  "description": "DLA Android Agent 工具层只读评测集。所有用例只调用只读工具、phone_wait 和 phone_screenshot；不点击、不输入、不打开应用、不写文件、不改设置。",
+  "defaults": {
+    "timeoutMs": 30000
+  },
+  "cases": [
+    {
+      "id": "device.info",
+      "title": "原生设备信息（phone_device）",
+      "category": "native",
+      "kind": "tool",
+      "tool": "phone_device",
+      "args": {},
+      "expect": {
+        "mode": "success",
+        "minLength": 40,
+        "contains": [
+          "model:",
+          "brand:",
+          "android:",
+          "sdk:",
+          "screen:",
+          "battery:",
+          "storage:"
+        ],
+        "regex": [
+          {
+            "name": "screen-metrics",
+            "pattern": "screen:\\s*\\d+x\\d+\\s+@\\d+dpi"
+          },
+          {
+            "name": "battery",
+            "pattern": "battery:\\s*(?:\\d+%|unknown)"
+          },
+          {
+            "name": "storage",
+            "pattern": "storage:\\s*[\\d.]+/[\\d.]+ GB free"
+          }
+        ]
+      }
+    },
+    {
+      "id": "settings.system.screen_brightness",
+      "title": "Settings 读取（system/screen_brightness）",
+      "category": "settings",
+      "kind": "tool",
+      "tool": "phone_setting_get",
+      "args": {
+        "namespace": "system",
+        "key": "screen_brightness"
+      },
+      "expect": {
+        "mode": "success",
+        "minLength": 1,
+        "regex": [
+          {
+            "name": "integer-or-null",
+            "pattern": "^(?:-?\\d+|（null）)$"
+          }
+        ]
+      }
+    },
+    {
+      "id": "settings.secure.accessibility_enabled",
+      "title": "Settings 读取（secure/accessibility_enabled）",
+      "category": "settings",
+      "kind": "tool",
+      "tool": "phone_setting_get",
+      "args": {
+        "namespace": "secure",
+        "key": "accessibility_enabled"
+      },
+      "expect": {
+        "mode": "success",
+        "minLength": 1,
+        "regex": [
+          {
+            "name": "boolean-or-null",
+            "pattern": "^(?:0|1|（null）)$"
+          }
+        ]
+      }
+    },
+    {
+      "id": "wait.500ms",
+      "title": "等待 500ms（phone_wait）",
+      "category": "wait",
+      "kind": "tool",
+      "tool": "phone_wait",
+      "args": {
+        "ms": 500
+      },
+      "expect": {
+        "mode": "success",
+        "contains": [
+          "已等待 500ms"
+        ],
+        "minPageMs": 450,
+        "maxPageMs": 5000
+      }
+    },
+    {
+      "id": "screen.dump",
+      "title": "屏幕控件树（phone_screen）",
+      "category": "screen",
+      "kind": "tool",
+      "tool": "phone_screen",
+      "args": {},
+      "privacy": "screen-content",
+      "allowEnvironmentSkip": true,
+      "skipIf": [
+        {
+          "pattern": "需要启用无障碍读屏",
+          "reason": "无障碍读屏未启用，phone_screen 无可用回退"
+        }
+      ],
+      "expect": {
+        "mode": "success",
+        "minLength": 20
+      }
+    },
+    {
+      "id": "screenshot.basic",
+      "title": "截图路径与尺寸（phone_screenshot）",
+      "category": "screenshot",
+      "kind": "screenshot",
+      "tool": "phone_screenshot",
+      "args": {},
+      "timeoutMs": 45000,
+      "allowEnvironmentSkip": true,
+      "skipIf": [
+        {
+          "pattern": "截图失败：需要启用无障碍读屏",
+          "reason": "无障碍读屏未启用，截图按 skip 记录"
+        }
+      ],
+      "expect": {
+        "mode": "success",
+        "minLength": 30
+      }
+    },
+    {
+      "id": "files.list_download",
+      "title": "目录列表（phone_files /sdcard/Download）",
+      "category": "files",
+      "kind": "tool",
+      "tool": "phone_files",
+      "args": {
+        "path": "/sdcard/Download"
+      },
+      "privacy": "file-listing",
+      "allowEnvironmentSkip": true,
+      "expect": {
+        "mode": "success",
+        "minLength": 1
+      }
+    },
+    {
+      "id": "files.read_hosts",
+      "title": "文件读取（phone_read /system/etc/hosts）",
+      "category": "files",
+      "kind": "tool",
+      "tool": "phone_read",
+      "args": {
+        "path": "/system/etc/hosts",
+        "max_bytes": 512
+      },
+      "allowEnvironmentSkip": true,
+      "skipIf": [
+        {
+          "pattern": "No such file or directory",
+          "reason": "设备上不存在 /system/etc/hosts，跳过该只读读取用例"
+        }
+      ],
+      "expect": {
+        "mode": "success",
+        "minLength": 40,
+        "contains": [
+          "size=",
+          "localhost"
+        ],
+        "regex": [
+          {
+            "name": "size-offset-prefix",
+            "pattern": "^size=\\d+ bytes, offset=0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "files.file_info_download",
+      "title": "文件信息（phone_file_info /sdcard/Download）",
+      "category": "files",
+      "kind": "tool",
+      "tool": "phone_file_info",
+      "args": {
+        "path": "/sdcard/Download"
+      },
+      "allowEnvironmentSkip": true,
+      "expect": {
+        "mode": "success",
+        "minLength": 10,
+        "contains": [
+          "directory"
+        ]
+      }
+    },
+    {
+      "id": "shell.test_id",
+      "title": "Shell 测试（AndroidHost.shellTest('id')）",
+      "category": "shell",
+      "kind": "shell",
+      "args": {},
+      "timeoutMs": 30000,
+      "allowEnvironmentSkip": true,
+      "skipIf": [
+        {
+          "pattern": "Shizuku 未运行",
+          "reason": "Shizuku 未运行，shell 测试按 skip 记录"
+        },
+        {
+          "pattern": "尚未授予 Shizuku|尚未授权",
+          "reason": "Shizuku 未授权，shell 测试按 skip 记录"
+        }
+      ],
+      "expect": {
+        "mode": "success",
+        "contains": [
+          "uid="
+        ]
+      }
+    },
+    {
+      "id": "failure.missing_file_read",
+      "title": "失败路径：读取不存在的文件",
+      "category": "failure",
+      "kind": "tool",
+      "tool": "phone_read",
+      "args": {
+        "path": "/sdcard/Download/__dla_agent_eval_missing_{{runId}}.txt",
+        "max_bytes": 64
+      },
+      "timeoutMs": 20000,
+      "allowEnvironmentSkip": true,
+      "expect": {
+        "mode": "failure_text",
+        "failureMarkers": [
+          "No such file or directory",
+          "无法读取文件大小",
+          "不存在",
+          "not found"
+        ],
+        "containsAny": [
+          "No such file or directory",
+          "无法读取文件大小",
+          "不存在",
+          "not found"
+        ],
+        "warnings": [
+          {
+            "name": "error-prefix",
+            "pattern": "^错误：",
+            "message": "phone_read 对不存在的文件返回的是 shell 原始文本（含 size=stat: ...），没有统一的 错误： 前缀；失败可辨识，但错误契约不一致。"
+          }
+        ]
+      }
+    },
+    {
+      "id": "failure.unknown_tool",
+      "title": "失败路径：未知工具",
+      "category": "failure",
+      "kind": "tool",
+      "tool": "phone_tool_that_does_not_exist_{{runId}}",
+      "args": {},
+      "timeoutMs": 20000,
+      "expect": {
+        "mode": "error",
+        "contains": [
+          "未知手机工具"
+        ],
+        "regex": [
+          {
+            "name": "error-prefix-and-tool-name",
+            "pattern": "^错误：未知手机工具："
+          }
+        ]
+      }
+    }
+  ]
+}

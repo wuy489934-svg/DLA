@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="no_browser">No browser available</string>
+    <string name="saved_to_downloads">Saved to Downloads: %1$s</string>
+    <string name="save_failed">Could not save the file</string>
+    <string name="open_failed">Could not open the file</string>
+    <string name="microphone_denied">Microphone permission denied, cannot record</string>
+    <string name="add_attachment">Add attachment</string>
+    <string name="action_camera">Take photo</string>
+    <string name="action_gallery">Choose from gallery</string>
+    <string name="action_files">Choose file</string>
+    <string name="camera_unavailable">Camera unavailable</string>
+    <string name="agent_channel_name">Agent running</string>
+    <string name="agent_channel_description">Keeps the agent running while tools execute</string>
+    <string name="agent_notification_title">Agent is working on a task</string>
+    <string name="agent_notification_text">It keeps running in the background; come back for the result</string>
+    <string name="shizuku_granted">Shizuku permission granted</string>
+    <string name="shizuku_denied">Shizuku permission denied</string>
+    <string name="shizuku_not_installed">Shizuku is not installed</string>
+</resources>

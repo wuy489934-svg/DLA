@@ -1,0 +1,39 @@
+# Secrets
+keystore/
+*.jks
+*.keystore
+keystore.properties
+local.properties
+.env
+.env.*
+
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/public/
+android/captures/
+*.apk
+*.aab
+
+# Web build output and deps
+web/node_modules/
+web/dist/
+web/.rspack/
+web/.cache/
+web/*.log
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Local test artifacts
+screenshots/
+tmp/
+*.log
+
+evals/results/
+
