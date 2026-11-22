@@ -231,34 +231,14 @@ export const en = {
   personaImageTooLarge: 'Portrait must be under 1.5 MB',
   personaImageFailed: 'Failed to read the portrait',
   personaOnlyLlm: 'Persona and portrait apply to LLM mode only; Agent mode uses its own tool rules.',
-  modelSettingsTitle: 'Model API',
   modelDeepSeekTitle: 'DeepSeek model endpoint',
   modelDeepSeekHint:
     'DLA keeps DeepSeek only. Blank Base URL/model use DeepSeek defaults; fetch-and-test verifies the key and model.',
-  modelProvider: 'Service',
-  modelProvider_deepseek: 'DeepSeek (Anthropic-compatible)',
-  modelProvider_openai: 'OpenAI',
-  modelProvider_qwen: 'Qwen Token Plan (OpenAI-compatible)',
-  modelProvider_anthropic: 'Anthropic',
-  modelProvider_custom: 'Custom',
-  modelAgentScope:
-    'This model is used by Agent mode. LLM mode always uses DeepSeek. Selecting a non-DeepSeek provider locks LLM mode but keeps Agent mode available.',
-  modelProtocol: 'Protocol',
   modelBaseUrl: 'Base URL',
   modelBaseUrlPlaceholder: 'Enter Base URL (blank uses service default)',
   modelName: 'Model',
   modelNamePlaceholder: 'Enter model name (blank uses service default)',
   modelFetchedModels: 'Fetched models ({count}), click to choose',
-  modelFeatureDeepseek:
-    'DeepSeek-compatible: deep thinking, web search, attachments and built-in TTS are available.',
-  modelFeatureOpenai:
-    'OpenAI-compatible: Agent mode uses this model and protocol; LLM mode remains DeepSeek. TTS uses OpenAI voices (stella→nova, tide→onyx).',
-  modelFeatureQwen:
-    'Qwen Token Plan: OpenAI-compatible compatible-mode/v1 endpoint; keys usually start with sk-sp-. Agent mode only; LLM remains DeepSeek. The model must support tool calling.',
-  modelFeatureAnthropic:
-    'Anthropic standard: Agent mode uses this model and protocol; LLM mode remains DeepSeek. TTS falls back to system speech.',
-  modelFeatureLimited:
-    'Standard protocols currently guarantee text chat only; thinking, search and attachments are disabled, and TTS falls back to system speech. Agent still uses the native DeepSeek engine.',
   modelApiKeyHint:
     'The API key belongs to the selected service. After switching, enter and confirm the matching key below.',
   modelFetchTest: 'Fetch models & test',
@@ -268,13 +248,6 @@ export const en = {
   modelTestOkNoList: 'Connected: {model} (this service has no model list)',
   modelTestFailed: 'Connection failed: {message}',
   modelNoModels: 'No models found; enter a model name manually',
-  protocolFeatureUnavailable:
-    'This feature is unavailable for the selected protocol; switch back to DeepSeek-compatible.',
-  protocolAttachmentsUnavailable:
-    'Attachments are unavailable for the selected protocol; switch back to DeepSeek-compatible.',
-  llmProtocolBlocked:
-    'LLM mode supports DeepSeek only. The selected protocol is available in Agent mode; switch to Agent or back to DeepSeek.',
-  llmProtocolAction: 'Model API',
   soundLabel: 'Interface sounds',
   mcpDescription:
     'Agent mode calls external tools over MCP. Connect an MCP server on your PC (for example the HTTPS address exposed by Tailscale) and enable it here.',

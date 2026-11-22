@@ -222,33 +222,14 @@ export const zh = {
   personaImageTooLarge: '立绘不能超过 1.5 MB',
   personaImageFailed: '读取立绘失败',
   personaOnlyLlm: '人设与立绘只在 LLM 区生效，Agent 区使用独立的工具规则。',
-  modelSettingsTitle: '模型接口',
   modelDeepSeekTitle: 'DeepSeek 模型接口',
   modelDeepSeekHint:
     'DLA 仅保留 DeepSeek 协议。Base URL/模型留空时使用 DeepSeek 默认值；拉取并测试连接会校验 Key 和模型。',
-  modelProvider: '服务',
-  modelProvider_deepseek: 'DeepSeek（Anthropic 兼容）',
-  modelProvider_openai: 'OpenAI',
-  modelProvider_qwen: '千问 Token Plan（OpenAI 兼容）',
-  modelProvider_anthropic: 'Anthropic',
-  modelProvider_custom: '自定义',
-  modelAgentScope:
-    '这里配置 Agent 区使用的模型；LLM 区始终使用 DeepSeek。选择非 DeepSeek 后 LLM 区会锁定，但 Agent 区仍可使用该协议。',
-  modelProtocol: '协议',
   modelBaseUrl: 'Base URL',
   modelBaseUrlPlaceholder: '输入 Base URL（留空用服务默认）',
   modelName: '模型',
   modelNamePlaceholder: '输入模型名（留空用服务默认）',
   modelFetchedModels: '已拉取模型（{count}），点击选择',
-  modelFeatureDeepseek: 'DeepSeek 兼容：深度思考、智能搜索、附件和内置朗读可用。',
-  modelFeatureOpenai:
-    'OpenAI 兼容：Agent 区使用该模型和协议；LLM 区仍固定 DeepSeek。朗读使用 OpenAI TTS（海星→nova，暗潮→onyx）。',
-  modelFeatureQwen:
-    '千问 Token Plan：使用 compatible-mode/v1 的 OpenAI 兼容接口；Key 通常以 sk-sp- 开头。只用于 Agent 区，LLM 区仍固定 DeepSeek；模型需支持工具调用。',
-  modelFeatureAnthropic:
-    'Anthropic 标准协议：Agent 区使用该模型和协议；LLM 区仍固定 DeepSeek。朗读回退系统语音。',
-  modelFeatureLimited:
-    '标准协议当前只保证纯文本对话；深度思考、智能搜索和附件已禁用，朗读回退系统语音。Agent 仍使用 DeepSeek 原生引擎。',
   modelApiKeyHint: 'API Key 属于当前服务；切换服务后请回到下方重新填写并确认。',
   modelFetchTest: '拉取并测试连接',
   modelNeedApiKey: '请先在数据管理里填写 API Key',
@@ -257,10 +238,6 @@ export const zh = {
   modelTestOkNoList: '连接成功：{model}（该服务未提供模型列表）',
   modelTestFailed: '连接失败：{message}',
   modelNoModels: '没有发现可用模型；请手动填写模型名',
-  protocolFeatureUnavailable: '当前协议暂不支持该能力，请切回 DeepSeek 兼容服务',
-  protocolAttachmentsUnavailable: '当前协议暂不支持附件，请切回 DeepSeek 兼容服务',
-  llmProtocolBlocked: 'LLM 区仅支持 DeepSeek。当前接口只能用于 Agent 区，请切到 Agent 或改回 DeepSeek。',
-  llmProtocolAction: '模型接口',
   soundLabel: '界面音效',
   mcpDescription:
     'Agent 区通过 MCP 调用外部工具。连接 PC 上的 MCP Server（例如经 Tailscale 暴露的 HTTPS 地址），并勾选启用的服务器。',
