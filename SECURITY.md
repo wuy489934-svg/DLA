@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`1.3.x` is the current line. Release candidates may change without notice.
+`1.4.x` is the current line. Release candidates may change without notice.
 
 ## Reporting a vulnerability
 
@@ -24,7 +24,8 @@ DLA is a power-user tool. It can:
 
 - read the current screen through Accessibility;
 - enumerate installed apps (`QUERY_ALL_PACKAGES`);
-- execute shell commands through Shizuku;
+- execute shell commands through Shizuku, or through Termux when the user has
+  configured `allow-external-apps` and granted DLA the `RUN_COMMAND` permission;
 - send selected conversation content to the API endpoint configured by the user.
 
 It is **not** a security boundary between the user and a malicious model. Prompt injection from web pages, notifications, or documents can attempt to invoke tools. Mitigations:
@@ -32,7 +33,8 @@ It is **not** a security boundary between the user and a malicious model. Prompt
 - approval mode is the default in the public build;
 - full-access mode must be explicitly enabled;
 - the notification and Agent UI provide an emergency stop;
-- shell commands are executed with the privileges the user granted to Shizuku.
+- shell commands are executed with the privileges the user granted to Shizuku,
+  or as DLA's own uid inside Termux (never root).
 
 Do not enable full-access mode on a device holding data you would not expose to the model or to a malicious prompt.
 

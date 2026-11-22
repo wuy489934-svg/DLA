@@ -13,7 +13,7 @@ DLA = **DeepSeek LLM Agent**，是一个运行在 Android 系统内的本地智�
 
 - **不是官方 Demo 的打包壳**：上游 Web UI 是 MIT 许可的基础，DLA 的 Agent 引擎、原生工具、调度器、迭代树、诊断和评测是独立实现。
 - **不是其它 Android Agent 的复刻**：不复制其 UI、资源或实现；DLA 的差异是 Android 原生工具 + 系统内运行 + 小体积。
-- **不是手机上的 Linux**：不提供发行版、终端生态或通用 shell 环境；shell 仅作为 Android 权限模型的兜底。
+- **不是自带 Linux 发行版**：DLA 不打包发行版、终端生态或通用 shell 环境；需要通用终端能力时，由用户自行安装的 Termux 提供（可选，与 Shizuku 二选一即可运行），DLA 只通过 `RUN_COMMAND` 调用它。
 - **不是多代理框架**：默认单 Agent；只有在明确、只读、有预算的场景才考虑有界子任务。
 
 ## 设计约束
@@ -27,7 +27,7 @@ DLA = **DeepSeek LLM Agent**，是一个运行在 Android 系统内的本地智�
 ## 品牌与素材
 
 - 应用名：DLA
-- 图标：Lucide `bot`，ISC
+- 图标：本项目原创（深青底 + 薄荷色终端轮廓 + 暖色星点），预览见 `docs/assets/`
 - 上游 Web UI：deepseek-ai/chat-demo，MIT
 - 不包含官方 Demo 的角色素材或未授权插画
 - 存储 key 中保留 `chat-demo:*` 仅用于兼容旧数据，不代表产品身份

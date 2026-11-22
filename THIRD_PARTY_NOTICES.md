@@ -15,7 +15,6 @@ report) and attach it to the release.
 | Rspack | MIT | build tool |
 | idb | ISC | IndexedDB wrapper |
 | fflate | MIT | compression |
-| Lucide `bot` icon | ISC | launcher icon; `licenses/lucide-ISC.txt` |
 
 ## Android
 
@@ -28,5 +27,6 @@ report) and attach it to the release.
 ## Assets
 
 The repository intentionally contains **no** third-party character artwork.
-The launcher icon is the Lucide line icon above. User-supplied persona images
+The launcher icon is original DLA artwork (see `NOTICE`); the preview images in
+`docs/assets/` are generated from the same source. User-supplied persona images
 are stored locally and are not distributed with the app.

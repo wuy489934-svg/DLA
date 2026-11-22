@@ -42,18 +42,37 @@ export const ChatInput = memo(function ChatInput({ sessionId }: { sessionId: str
   return <Input key={sessionId === null ? 'new' : `session:${sessionId}`} sessionId={sessionId} />
 })
 
-/** 读取 Shizuku 状态；只有运行且已授权才允许 Agent 发消息 */
-const readShizukuReady = (): boolean => {
+/** Shizuku 与 Termux 任一可用即可对话；两者都不可用才禁聊 */
+type AgentRuntime = { shizuku: boolean; termux: boolean }
+
+const readAgentRuntime = (): AgentRuntime => {
+  let shizuku = false
+  let termux = false
   try {
     const raw = window.AndroidHost?.shizukuStatus?.()
-    if (!raw) {
-      return false
+    if (raw) {
+      const status = JSON.parse(raw) as { running?: boolean; granted?: boolean }
+      shizuku = status.running === true && status.granted === true
     }
-    const status = JSON.parse(raw) as { running?: boolean; granted?: boolean }
-    return status.running === true && status.granted === true
   } catch {
-    return false
+    shizuku = false
   }
+  try {
+    const raw = window.AndroidHost?.termuxStatus?.()
+    if (raw) {
+      const status = JSON.parse(raw) as { installed?: boolean; granted?: boolean }
+      termux = status.installed === true && status.granted === true
+    }
+  } catch {
+    termux = false
+  }
+  return { shizuku, termux }
+}
+
+/** Agent 是否能发消息：Shizuku 或 Termux 至少一项就绪 */
+const readAgentReady = (): boolean => {
+  const runtime = readAgentRuntime()
+  return runtime.shizuku || runtime.termux
 }
 
 const Input = ({ sessionId }: { sessionId: string | null }) => {
@@ -74,7 +93,7 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     sessionId ? (state.sessionCache[sessionId]?.mode ?? 'llm') : undefined
   )
   const agentMode = (sessionId ? (sessionMode ?? 'llm') : composerMode) === 'agent'
-  const [shizukuReady, setShizukuReady] = useState(() => !agentMode || readShizukuReady())
+  const [agentReady, setAgentReady] = useState(() => !agentMode || readAgentReady())
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const togglesRef = useRef<HTMLDivElement>(null)
@@ -98,10 +117,10 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   useEffect(() => {
     if (!agentMode) {
-      setShizukuReady(true)
+      setAgentReady(true)
       return
     }
-    const update = () => setShizukuReady(readShizukuReady())
+    const update = () => setAgentReady(readAgentReady())
     update()
     const timer = window.setInterval(update, 2000)
     return () => window.clearInterval(timer)
@@ -170,11 +189,11 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     !streaming &&
     voice.status === 'idle' &&
     draftReady &&
-    (!agentMode || shizukuReady)
+    (!agentMode || agentReady)
 
   const send = () => {
-    if (agentMode && !shizukuReady) {
-      showToast({ key: 'agentNeedsShizuku', type: 'error' })
+    if (agentMode && !agentReady) {
+      showToast({ key: 'agentNeedsRuntime', type: 'error' })
       openSettings('agent')
       return
     }
@@ -208,9 +227,10 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
       }}
     >
       <DraftAttachments items={attachments} onRetry={retryFile} onRemove={removeFile} />
-      {agentMode && !shizukuReady ? (
+      {agentMode && !agentReady ? (
         <div className={styles.agentWarning}>
-          <span>{t('agentNeedsShizuku')}</span>
+          <span>{t('agentNeedsRuntime')}</span>
+          <span className={styles.agentWarningHint}>{t('agentRuntimeHint')}</span>
           <button type="button" onClick={() => openSettings('agent')}>
             {t('agentOpenSettings')}
           </button>

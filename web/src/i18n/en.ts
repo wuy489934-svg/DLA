@@ -209,6 +209,8 @@ export const en = {
   agentModeChip: 'AGENT',
   agentModeChipTitle: 'Driven by the native Agent loop; keeps running in background',
   agentNeedsShizuku: 'Agent requires Shizuku to be running and authorized; sending is disabled.',
+  agentNeedsRuntime: 'Agent needs either Shizuku or Termux; both are unavailable, so sending is disabled.',
+  agentRuntimeHint: 'Either one is enough: authorize “Phone ability (Shizuku)” in Settings → Agent, or set up “Termux environment” (allow external commands and grant DLA the permission).',
   agentOpenSettings: 'Open Agent settings',
   agentNoFiles: 'Attachments are not supported in Agent mode yet',
   agentToolRunning: 'Running',
@@ -224,7 +226,7 @@ export const en = {
   agentToolsGroup: 'Tool calls · {count}',
   personaLabel: 'Persona (LLM only)',
   personaDescription: 'Used as the system prompt for LLM requests; leave empty for the built-in identity.',
-  personaPlaceholder: 'e.g. You are a patient, concise assistant...',
+  personaPlaceholder: 'e.g. You are Yuyu, a personified DeepSeek...',
   personaUploadImage: 'Upload portrait',
   personaPreviewImage: 'View portrait',
   personaRemoveImage: 'Remove portrait',
@@ -272,6 +274,23 @@ export const en = {
   shizukuGrant: 'Authorize',
   shizukuTest: 'Test shell',
   shizukuTestResult: 'Shell result: {result}',
+  termuxTitle: 'Termux environment',
+  termuxDescription:
+    'Local shell, Node/npm, Python, rg and network/package management via Termux, without Shizuku. The AI sees one termux tool and chooses actions on demand instead of receiving every command.',
+  termuxInstalled: 'Installed {version}',
+  termuxPermissionMissing: 'Installed, permission needed',
+  termuxNotInstalled: 'Not installed',
+  termuxOpen: 'Open Termux',
+  termuxSetup: 'One-tap setup',
+  termuxTest: 'Test Termux',
+  termuxPermission: 'App permissions',
+  termuxCopyCommand: 'Copy Termux permission command',
+  termuxCopied: 'Copied',
+  termuxHint:
+    'Set allow-external-apps=true in ~/.termux/termux.properties and grant DLA “Run commands in Termux environment”.',
+  termuxMirrorHint: 'Setup prefers TUNA/USTC Termux mirrors and npmmirror, then falls back to official sources.',
+  termuxHarnessHint:
+    'One-tap setup installs only the generic toolchain (Node/Python/git/rg); it does not download another agent runtime. It prefers TUNA/USTC and npmmirror/PyPI mirrors.',
   shizukuHint:
     'Shizuku stops after a reboot: run the start command shown in Shizuku over USB, or start it with wireless debugging.',
   fullAccessLabel: 'Full access (skip confirmations)',
@@ -281,5 +300,4 @@ export const en = {
   fullAccessDescription:
     'When enabled, shell, file writes and settings changes run immediately without an approval card. Only enable it when you fully trust the task.',
 } satisfies Record<keyof typeof zh, string>
-
 

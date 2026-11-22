@@ -34,6 +34,12 @@ interface AndroidAgentHost {
   shizukuRequest?: () => void
   shizukuOpen?: () => void
   shizukuInstall?: () => void
+  termuxStatus?: () => string
+  termuxLastResult?: () => string
+  termuxOpen?: () => void
+  termuxOpenSettings?: () => void
+  termuxSetup?: () => void
+  termuxTest?: () => void
   shellTest?: (command: string) => string
   httpRequest?: (
     method: string,

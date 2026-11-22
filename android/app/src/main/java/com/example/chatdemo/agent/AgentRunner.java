@@ -1,6 +1,7 @@
 package com.example.chatdemo.agent;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.os.SystemClock;
 
 import org.json.JSONArray;
@@ -16,8 +17,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +44,8 @@ public final class AgentRunner {
     }
 
     private static final int MAX_TOOL_RESULT_CHARS = 24000;
+    /** Termux RUN_COMMAND 权限名；用于判断 termux 工具是否真的可用 */
+    private static final String TERMUX_RUN_COMMAND = "com.termux.permission.RUN_COMMAND";
     private static final int MAX_ROUNDS = 120;
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final int MAX_STEPS_IN_PLAN = 30;
@@ -135,6 +140,19 @@ public final class AgentRunner {
     private String lastToolSignature = "";
     private int repeatCount = 0;
     private final Map<String, ToolRef> toolMap = new HashMap<>();
+    /** 全部本地工具目录；只有核心工具会直接下发，其余由 tool_search 按需发现。 */
+    private final Map<String, JSONObject> localCatalog = new LinkedHashMap<>();
+    private final Set<String> discoveredLocal = new HashSet<>();
+    /**
+     * 核心工具：只直接下发读屏/点击/输入这类高频手机操作。
+     * shell 类（phone_shell）和 Termux 统一交给 tool_search 按需发现，
+     * 避免把 shell/终端能力一次性全部注入。
+     */
+    private static final Set<String> CORE_LOCAL = new HashSet<>(Arrays.asList(
+            "phone_screen", "phone_tap_text", "phone_wait",
+            "phone_tap", "phone_swipe", "phone_input", "phone_key",
+            "phone_screenshot", "phone_open", "phone_apps", "phone_device"
+    ));
     private final Map<String, McpClient> clientByServer = new HashMap<>();
     /** 需要用户确认的 MCP 工具（按函数名） */
     private final Set<String> riskyTools = new HashSet<>();
@@ -229,6 +247,7 @@ public final class AgentRunner {
                 if (cancelled) {
                     throw new CancelledException();
                 }
+                appendDiscoveredTools(tools);
                 trimMessages(messages);
                 RoundResult result = streamRound(messages, tools);
                 if (result.toolCalls.isEmpty()) {
@@ -263,6 +282,8 @@ public final class AgentRunner {
                     start.put("input", call.arguments.length() == 0 ? "{}" : call.arguments.toString());
                     boolean needsApproval = !repeated && !autoApprove
                             && (LocalTools.requiresApproval(call.name)
+                            || TermuxTools.requiresApproval(call.name, call.arguments.length() == 0
+                                    ? new JSONObject() : new JSONObject(call.arguments.toString()))
                             || riskyTools.contains(call.name));
                     start.put("approval", needsApproval);
                     start.put("round", round + 1);
@@ -709,19 +730,51 @@ public final class AgentRunner {
             status.put("text", "已连接 " + clientByServer.size() + " 个 MCP Server，共 " + tools.length() + " 个工具");
             emit(status);
         }
-        // 手机内置工具走 Shizuku shell，不依赖 MCP；始终下发，未就绪时调用会返回明确错误
-        JSONArray local = LocalTools.specs();
-        for (int i = 0; i < local.length(); i++) {
-            tools.put(local.optJSONObject(i));
+        // 能力探测：Shizuku / Termux 有一样可用就能跑 Agent。
+        // 工具也按可用性裁剪：手机工具需要 Shizuku，shell 与 termux 只按需发现。
+        boolean shizukuReady = ShizukuShell.running() && ShizukuShell.granted();
+        boolean termuxReady = TermuxBridge.isInstalled(context)
+                && context.checkSelfPermission(TERMUX_RUN_COMMAND)
+                == PackageManager.PERMISSION_GRANTED;
+        int coreCount = 0;
+        if (shizukuReady) {
+            JSONArray local = LocalTools.specs();
+            for (int i = 0; i < local.length(); i++) {
+                JSONObject spec = local.optJSONObject(i);
+                if (spec == null) {
+                    continue;
+                }
+                String name = spec.optString("name");
+                if (name.isEmpty()) {
+                    continue;
+                }
+                localCatalog.put(name, spec);
+                if (CORE_LOCAL.contains(name)) {
+                    tools.put(spec);
+                    coreCount++;
+                }
+            }
         }
-        if (local.length() > 0) {
-            JSONObject status = new JSONObject();
-            status.put("type", "status");
-            status.put("text", ShizukuShell.granted()
-                    ? "手机工具 " + local.length() + " 个已就绪（Shizuku shell）"
-                    : "手机工具 " + local.length() + " 个，但 Shizuku 未运行/未授权");
-            emit(status);
+        if (termuxReady) {
+            // termux 不在初始 tools 里，只放进目录等 tool_search 取用。
+            localCatalog.put(TermuxTools.NAME, TermuxTools.spec());
         }
+        tools.put(toolSearchSpec());
+        JSONObject localStatus = new JSONObject();
+        localStatus.put("type", "status");
+        StringBuilder statusText = new StringBuilder("核心工具 ").append(coreCount).append(" 个已加载");
+        statusText.append(shizukuReady ? "（Shizuku 就绪）" : "（Shizuku 未就绪，手机工具已跳过）");
+        statusText.append("；shell、Termux、文件、设置等按需 tool_search 发现");
+        if (termuxReady) {
+            statusText.append("；Termux 可用（搜索 shell 或 termux）");
+        } else {
+            statusText.append("；Termux 不可用");
+        }
+        if (!shizukuReady && !termuxReady) {
+            statusText.append("；没有任何本地执行能力，请提示用户到 设置 → Agent 配置 Shizuku 或 Termux");
+        }
+        localStatus.put("text", statusText.toString());
+        emit(localStatus);
         // 官方联网：/v1/tools/search 与 /v1/tools/fetch
         JSONArray web = WebTools.specs();
         for (int i = 0; i < web.length(); i++) {
@@ -733,6 +786,118 @@ public final class AgentRunner {
             tools.put(task.optJSONObject(i));
         }
         return tools;
+    }
+
+    /** 只暴露工具发现入口；工具 schema 不在初始上下文里全部注入。 */
+    private JSONObject toolSearchSpec() throws Exception {
+        JSONObject properties = new JSONObject();
+        properties.put("query", new JSONObject()
+                .put("type", "string")
+                .put("description", "能力关键词，例如 文件/zip/设置/剪贴板/通知/截图/文档"));
+        properties.put("limit", new JSONObject()
+                .put("type", "number")
+                .put("description", "最多返回几个工具，默认 5，最大 8"));
+        return new JSONObject()
+                .put("name", "tool_search")
+                .put("description",
+                        "搜索 DLA 的扩展工具目录。初始只加载核心手机操作；"
+                                + "需要 shell、Termux 终端、文件、应用管理、设置、剪贴板、通知、zip、docx 等能力时先搜索"
+                                + "（shell 类关键词：shell/终端/命令/Termux/node/python）。"
+                                + "返回匹配工具的说明和参数，下一轮这些工具会加入可用列表。"
+                                + "搜索不执行任何操作。")
+                .put("input_schema", new JSONObject()
+                        .put("type", "object")
+                        .put("properties", properties)
+                        .put("required", new JSONArray().put("query")));
+    }
+
+    private void appendDiscoveredTools(JSONArray tools) throws Exception {
+        if (discoveredLocal.isEmpty()) {
+            return;
+        }
+        Set<String> present = new HashSet<>();
+        for (int i = 0; i < tools.length(); i++) {
+            JSONObject item = tools.optJSONObject(i);
+            if (item != null) {
+                present.add(item.optString("name"));
+            }
+        }
+        for (String name : discoveredLocal) {
+            if (present.contains(name)) {
+                continue;
+            }
+            JSONObject spec = localCatalog.get(name);
+            if (spec != null) {
+                tools.put(spec);
+                present.add(name);
+            }
+        }
+    }
+
+    private McpClient.ToolResult executeToolSearch(JSONObject arguments) throws Exception {
+        String query = arguments.optString("query", "").trim().toLowerCase();
+        if (query.isEmpty()) {
+            return new McpClient.ToolResult(
+                    "请给出关键词，例如：文件、zip、设置、剪贴板、通知、截图、文档。", true);
+        }
+        int limit = Math.max(1, Math.min(arguments.optInt("limit", 5), 8));
+        String[] words = query.split("\\s+");
+        List<JSONObject> matches = new ArrayList<>();
+        for (JSONObject spec : localCatalog.values()) {
+            String name = spec.optString("name", "").toLowerCase();
+            String description = spec.optString("description", "").toLowerCase();
+            boolean matched = false;
+            for (String word : words) {
+                if (!word.isEmpty() && (name.contains(word) || description.contains(word))) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (matched) {
+                matches.add(spec);
+            }
+        }
+        if (matches.isEmpty()) {
+            return new McpClient.ToolResult(
+                    "没有匹配「" + query + "」的扩展工具。可试：shell、终端、Termux、文件、目录、读取、写入、替换、"
+                            + "应用、设置、剪贴板、通知、zip、docx、截图。"
+                            + "（若 Shizuku 或 Termux 都没就绪，扩展工具目录会是空的。）", false);
+        }
+        StringBuilder text = new StringBuilder("匹配 " + matches.size()
+                + " 个工具（已在下一轮加入可用列表）：\n");
+        int count = 0;
+        for (JSONObject spec : matches) {
+            if (count >= limit) {
+                break;
+            }
+            String name = spec.optString("name");
+            if (CORE_LOCAL.contains(name)) {
+                continue;
+            }
+            discoveredLocal.add(name);
+            count++;
+            text.append("- ").append(name).append("：")
+                    .append(spec.optString("description", "")).append('\n');
+            JSONObject schema = spec.optJSONObject("input_schema");
+            JSONObject properties = schema == null ? null : schema.optJSONObject("properties");
+            if (properties != null) {
+                JSONArray names = properties.names();
+                if (names != null) {
+                    text.append("  参数：");
+                    for (int i = 0; i < names.length(); i++) {
+                        if (i > 0) {
+                            text.append(", ");
+                        }
+                        text.append(names.optString(i));
+                    }
+                    text.append('\n');
+                }
+            }
+        }
+        if (count == 0) {
+            return new McpClient.ToolResult("匹配到的工具已经是核心工具，可直接调用。", false);
+        }
+        return new McpClient.ToolResult(text.toString().trim(), false);
     }
 
     private String uniqueFunctionName(String serverId, String toolName) {
@@ -759,7 +924,13 @@ public final class AgentRunner {
 
     /** 长任务状态注入 system：计划与关键笔记不会被上下文裁剪掉 */
     private String buildSystem() {
-        StringBuilder builder = new StringBuilder(payload.optString("system", ""));
+        String base = payload.optString("system", "");
+        if (base.trim().isEmpty()) {
+            base = "你是 DLA（DeepSeek LLM Agent），运行在用户 Android 手机上的本地智能体。"
+                    + "你是 AI，不是人类，也没有脱离工具的真实感知；只能通过工具结果了解设备与环境。"
+                    + "具体工具以当前 tools 列表为准，不要臆造操作结果。\n";
+        }
+        StringBuilder builder = new StringBuilder(base);
         if (plan.length() > 0) {
             builder.append("\n\n【当前任务计划】\n");
             for (int i = 0; i < plan.length(); i++) {
@@ -852,6 +1023,16 @@ public final class AgentRunner {
     }
 
     private McpClient.ToolResult executeTool(ToolCall call) throws Exception {
+        if ("tool_search".equals(call.name)) {
+            JSONObject arguments = call.arguments.length() == 0
+                    ? new JSONObject() : new JSONObject(call.arguments.toString());
+            return executeToolSearch(arguments);
+        }
+        if (TermuxTools.isTermux(call.name)) {
+            JSONObject arguments = call.arguments.length() == 0
+                    ? new JSONObject() : new JSONObject(call.arguments.toString());
+            return TermuxTools.execute(context, arguments);
+        }
         if (TaskTools.isTask(call.name)) {
             JSONObject arguments = call.arguments.length() == 0
                     ? new JSONObject()

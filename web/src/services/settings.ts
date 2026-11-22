@@ -148,7 +148,15 @@ const initialApiModel = (): string => {
   return saved
 }
 
-const initialApiKey = (): string | null => read(KEYS.apiKey)
+const initialApiKey = (): string | null => {
+  const saved = read(KEYS.apiKey)
+  // 清掉开发/联调时写入的占位 Key，避免用户看到“Authentication Fails: ****-key”。
+  if (saved === 'mock-key') {
+    write(KEYS.apiKey, null)
+    return null
+  }
+  return saved
+}
 
 export const useSettings = create<Settings>(() => ({
   apiKey: initialApiKey(),
@@ -219,7 +227,6 @@ export const setPersonaImage = (personaImage: string | null) => {
   write(KEYS.personaImage, personaImage)
   useSettings.setState({ personaImage })
 }
-
 
 export const setSoundEnabled = (soundEnabled: boolean) => {
   write(KEYS.soundEnabled, String(soundEnabled))

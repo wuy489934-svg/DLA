@@ -53,6 +53,7 @@ import com.example.chatdemo.agent.LocalTools;
 import com.example.chatdemo.agent.McpClient;
 import com.example.chatdemo.agent.McpStore;
 import com.example.chatdemo.agent.ShizukuShell;
+import com.example.chatdemo.agent.TermuxBridge;
 
 import rikka.shizuku.Shizuku;
 
@@ -73,6 +74,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 把 DLA Web UI 的静态产物装进 WebView。
@@ -755,6 +757,9 @@ public class MainActivity extends Activity {
         }
     }
 
+    private final AtomicBoolean termuxSetupRunning = new AtomicBoolean(false);
+    private volatile String lastTermuxResult = "";
+
     /** 暴露给网页的桥；只在主页面注入，且只开放这几个方法。 */
     private final class HostBridge {
 
@@ -852,6 +857,109 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void mcpDeleteServer(String id) {
             McpStore.remove(MainActivity.this, id);
+        }
+
+        /** Termux 状态：只返回安装信息，不执行命令 */
+        @JavascriptInterface
+        public String termuxStatus() {
+            return TermuxBridge.status(MainActivity.this).toString();
+        }
+
+        @JavascriptInterface
+        public String termuxLastResult() {
+            return lastTermuxResult;
+        }
+
+        @JavascriptInterface
+        public void termuxOpen() {
+            try {
+                TermuxBridge.open(MainActivity.this);
+            } catch (Exception error) {
+                toast("无法打开 Termux：" + error.getMessage());
+            }
+        }
+
+        @JavascriptInterface
+        public void termuxOpenSettings() {
+            try {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName()))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception error) {
+                toast("无法打开应用设置");
+            }
+        }
+
+        /** 一键安装 Termux 环境；结果通过 Toast 提示，不在 UI 线程执行。 */
+        @JavascriptInterface
+        public void termuxSetup() {
+            if (!termuxSetupRunning.compareAndSet(false, true)) {
+                toast("Termux 环境安装正在进行，请稍候");
+                return;
+            }
+            new Thread(() -> {
+                try {
+                    String script = TermuxBridge.setupScript(MainActivity.this);
+                    if (script.isEmpty()) {
+                        lastTermuxResult = "Termux 安装脚本缺失";
+                        toast(lastTermuxResult);
+                        return;
+                    }
+                    // MIUI 会拦截后台跨应用启动 RunCommandService；先把 Termux 拉到前台。
+                    runOnUiThread(() -> TermuxBridge.open(MainActivity.this));
+                    try {
+                        Thread.sleep(2000);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                    // 先做 8 秒探针，避免未开启 allow-external-apps 时白等 10 分钟。
+                    TermuxBridge.Result probe = TermuxBridge.run(
+                            MainActivity.this, "echo DLA_TERMUX_READY", 8000L);
+                    if (probe.isError() || !probe.text().contains("DLA_TERMUX_READY")) {
+                        lastTermuxResult = probe.text()
+                                + "\n\n请先在 Termux 执行：\n"
+                                + "echo \"allow-external-apps=true\" >> ~/.termux/termux.properties "
+                                + "&& termux-reload-settings";
+                        toast("Termux 尚未允许外部命令，请先复制并执行设置 → Termux 授权命令");
+                        return;
+                    }
+                    TermuxBridge.Result result = TermuxBridge.run(
+                            MainActivity.this, script, 600_000L);
+                    String text = result.text();
+                    lastTermuxResult = text;
+                    if (!result.isError() && text.contains("DLA_TERMUX_SETUP_DONE")) {
+                        toast("Termux 通用环境安装完成，可以直接使用 Agent 的 termux 工具");
+                    } else {
+                        String shortText = text.length() > 300 ? text.substring(0, 300) + "…" : text;
+                        toast("Termux 安装未完成：" + shortText);
+                    }
+                } finally {
+                    termuxSetupRunning.set(false);
+                }
+            }, "dla-termux-setup").start();
+        }
+
+        /** 测试 Termux 外部命令链路。 */
+        @JavascriptInterface
+        public void termuxTest() {
+            new Thread(() -> {
+                runOnUiThread(() -> TermuxBridge.open(MainActivity.this));
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                TermuxBridge.Result result = TermuxBridge.run(
+                        MainActivity.this,
+                        "echo DLA_TERMUX_OK; node -v 2>/dev/null; npm -v 2>/dev/null; "
+                                + "python --version 2>&1; rg --version 2>/dev/null | head -1",
+                        12_000L);
+                String text = result.text();
+                lastTermuxResult = text;
+                String shortText = text.length() > 300 ? text.substring(0, 300) + "…" : text;
+                toast(result.isError() ? "Termux 连接失败：" + shortText
+                        : "Termux 连接成功：" + shortText);
+            }, "dla-termux-test").start();
         }
 
         /** 测试连接并拉工具列表；结果通过 __mcpResult 异步回传 */

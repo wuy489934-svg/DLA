@@ -165,8 +165,9 @@
 
 .agentWarning {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   box-sizing: border-box;
   width: 100%;
   margin: 0 0 8px;
@@ -177,6 +178,12 @@
   color: #b45309;
   font-size: 12px;
   line-height: 18px;
+}
+
+.agentWarningHint {
+  opacity: 0.85;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .agentWarning span {

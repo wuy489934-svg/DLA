@@ -10,12 +10,9 @@ Upstream web UI
   MIT License — see licenses/chat-demo-MIT.txt
 
 Launcher icon
-  Lucide "bot" icon
-  Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022
-  as part of Feather (MIT); all other copyright (c) for Lucide are held by
-  Lucide Contributors 2022.
-  ISC License — see licenses/lucide-ISC.txt
-  Source: https://lucide.dev/icons/bot
+  Original artwork created for DLA (dark teal plate, mint terminal outline,
+  warm spark). No third-party icon set is used. Preview assets in docs/assets/
+  are generated from the same source and carry the project's Apache-2.0 license.
 
 Shizuku
   Copyright RikkaApps

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4.1
+
+- Added optional **Termux** execution backend: a single `termux` tool
+  (`action=status/capabilities/run`) bridged over `com.termux.RUN_COMMAND`, with
+  stdout/stderr/exit code returned through a `PendingIntent` result service.
+- **Shizuku or Termux, either one is enough**: the Agent refuses to start only
+  when both are unavailable, and the UI explains both setup paths.
+- **Tools are discovered on demand**: only 11 core device actions are injected
+  up front; `phone_shell`, `termux`, file/settings/zip/docx helpers must be found
+  with `tool_search` first. The injected tool set is trimmed by availability
+  (no Shizuku -> no `phone_*`; no Termux -> no `termux`).
+- Agent system prompt updated for the on-demand tool model and self-awareness
+  (unofficial product, no fabricated operations, confirm risky actions).
+- New original launcher icon (square + round + adaptive + monochrome) and a
+  demo GIF under `docs/assets/`.
+- New documentation: `docs/AGENT-RUNTIME.md` (full execution path) and
+  `docs/INSTALL.md` (detailed Android install).
+- VersionCode 23 / versionName 1.4.1.
+
 ## 1.3.0
 
 - DLA is now DeepSeek-only again. Removed the OpenAI/Qwen/Anthropic provider

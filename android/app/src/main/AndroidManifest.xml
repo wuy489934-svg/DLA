@@ -17,11 +17,14 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 列出全部应用（模型需要「应用名 | 包名」来打开应用）；仅侧载/自用 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- Termux RUN_COMMAND：在 Termux 环境执行命令 -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="com.termux" />
     </queries>
 
     <application
@@ -111,6 +114,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- 接收 Termux RUN_COMMAND 的执行结果 -->
+        <service
+            android:name=".agent.TermuxResultService"
+            android:exported="false" />
     </application>
 
 </manifest>

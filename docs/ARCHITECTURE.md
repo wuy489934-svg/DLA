@@ -10,10 +10,11 @@ web/ (React + Zustand + IndexedDB)
                                     ▼
 android/ (Java, single Activity)
   ├─ MainActivity / WebView host
-  ├─ HostBridge (attachments, files, Shizuku, diagnostics)
+  ├─ HostBridge (attachments, files, Shizuku, Termux, diagnostics)
   ├─ AgentService (specialUse FGS + notification stop)
   ├─ AgentRuntime / AgentRunner (native LLM loop + tools)
-  ├─ LocalTools / McpClient / WebTools
+  ├─ LocalTools / TermuxTools / McpClient / WebTools
+  ├─ TermuxBridge / TermuxResultService (RUN_COMMAND + result callback)
   ├─ ChatDemoAccessibilityService (in-process screen tree)
   └─ Diagnostics / AgentCheckpoint / AgentKeepAlive
 ```
@@ -21,11 +22,19 @@ android/ (Java, single Activity)
 ## Request flow (Agent)
 
 1. Web builds a JSON payload and calls `AndroidHost.agentStart`.
-2. `AgentRuntime` writes an encrypted checkpoint and starts `AgentService`.
-3. `AgentRunner` posts to the configured API, parses streamed tool calls.
-4. Tools run through Shizuku, Accessibility, WebFetch, or MCP.
-5. Events are delivered to the WebView through `window.__agentEvent`.
-6. On completion the checkpoint is cleared and the service stops.
+2. `AgentRuntime` checks availability — **Shizuku or Termux, either one is
+   enough** — and refuses only when both are missing.
+3. `AgentRuntime` writes an encrypted checkpoint and starts `AgentService`.
+4. `AgentRunner` builds the tool set: 11 core device actions, `tool_search`, and
+   `termux`/local extensions registered for on-demand discovery. Unavailable
+   backends are not injected at all.
+5. `AgentRunner` posts to the configured API, parses streamed tool calls.
+6. Tools run through Accessibility, Shizuku, Termux (`RUN_COMMAND`), WebFetch, or
+   MCP.
+7. Events are delivered to the WebView through `window.__agentEvent`.
+8. On completion the checkpoint is cleared and the service stops.
+
+Full walkthrough: `docs/AGENT-RUNTIME.md`.
 
 ## Crash behavior
 

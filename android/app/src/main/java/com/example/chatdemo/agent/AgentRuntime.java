@@ -1,6 +1,7 @@
 package com.example.chatdemo.agent;
 
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -65,9 +66,16 @@ public final class AgentRuntime {
                 emitNow(id, errorEvent("Agent 正在运行，请先停止当前任务"));
                 return;
             }
-            if (!ShizukuShell.running() || !ShizukuShell.granted()) {
+            // 准入：Shizuku 与 Termux 任一可用即可对话；两者都缺才拦下并给出两条开启路径。
+            boolean shizukuReady = ShizukuShell.running() && ShizukuShell.granted();
+            boolean termuxReady = TermuxBridge.isInstalled(context)
+                    && context.checkSelfPermission("com.termux.permission.RUN_COMMAND")
+                    == PackageManager.PERMISSION_GRANTED;
+            if (!shizukuReady && !termuxReady) {
                 emitNow(id, errorEvent(
-                        "Agent 需要 Shizuku 运行且已授权；请到 设置 → Agent → 手机能力 启动并授权后重试"
+                        "Agent 需要 Shizuku 或 Termux 至少一项可用。请到 设置 → Agent："
+                                + "授权「手机能力（Shizuku）」，或配好「Termux 环境」"
+                                + "（在 Termux 开启 allow-external-apps 并授予 DLA RUN_COMMAND 权限）后重试"
                 ));
                 return;
             }
