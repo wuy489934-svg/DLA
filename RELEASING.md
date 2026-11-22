@@ -1,72 +1,65 @@
 # Releasing
 
-The source tree and a signed RC are prepared, but **nothing is published yet**.
+## Current release
 
-## Recommended timing
+DLA **1.3.0** is published as an open-source GitHub Release:
 
-Do not publish the same day the RC is built. Suggested gate:
+- Repository: https://github.com/wuy489934-svg/DLA
+- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v1.3.0
+- Tag: `v1.3.0`
+- VersionCode 19 / versionName 1.3.0
+- APK + `SHA256SUMS` are attached to the Release.
 
-1. Freeze `1.3.0` for 7 days of dogfooding.
-2. Run a clean-clone build on a machine without the private workspace
-   (`BUILD.md` / CI).
-3. Confirm the application id and GitHub owner; change
-   `io.github.dla.agent` if needed.
-4. Back up the release key and passwords outside the repository; verify the
-   key is not in Git history.
-5. Install the signed APK on at least two Android versions (14/15/16) and
-   exercise: LLM chat, Agent with Shizuku, Agent with accessibility disabled,
-   emergency stop, crash recovery.
-6. Publish source first, then a GitHub Release with the APK and SHA-256.
-7. Tag `v1.3.0` only after the RC has no open P0 issue.
-
-Earliest suggested public date if the RC is built on 2026-11-21:
-**2026-11-28**.
-
-## Build a release
+## Build locally
 
 ```bash
 cd web && pnpm install && pnpm build
-cd ../android
+cd ../android && ./gradlew assembleDebug
+```
+
+For a signed release, provide the signing key outside the repository:
+
+```bash
+cd android
+cat > ../keystore/keystore.properties <<'EOF'
+storeFile=../keystore/dla-release.jks
+storePassword=...
+keyAlias=dla
+keyPassword=...
+EOF
 ./gradlew assembleRelease
 ```
 
-The release build reads `../keystore/keystore.properties`; the `keystore/`
-directory and `*.jks` are ignored. Never commit them.
+`keystore/` and `*.jks` are ignored. Never commit a JKS or its passwords.
 
-## Publish
+## GitHub Actions
 
-- GitHub Releases: APK + `SHA256SUMS` + short notes.
-- Do **not** publish to Google Play for 1.0: `QUERY_ALL_PACKAGES`,
-  Accessibility, and Shizuku shell make policy review unlikely.
-- Obtainium users can consume the GitHub Release directly.
-- F-Droid only after reproducible builds and a license/anti-feature review.
+- `.github/workflows/ci.yml` runs web typecheck/build and an Android debug build.
+- `.github/workflows/release.yml` runs on `v*` tags and creates the signed APK + `SHA256SUMS` Release.
+- Signing is read from repository secrets:
+  - `ANDROID_KEYSTORE_BASE64`
+  - `ANDROID_KEYSTORE_PASSWORD`
+  - `ANDROID_KEY_ALIAS`
+  - `ANDROID_KEY_PASSWORD`
+
+## Publishing a follow-up release
+
+1. Update `versionCode` / `versionName` in `android/app/build.gradle`.
+2. Update the web `package.json` version.
+3. Update `CHANGELOG.md`.
+4. Commit and push `main`; confirm CI is green.
+5. Create and push a tag:
+
+```bash
+git tag -a v1.3.1 -m "DLA 1.3.1"
+git push origin v1.3.1
+```
+
+6. Wait for the `release` workflow and verify the APK signature and SHA-256.
 
 ## After publishing
 
 - Keep the signing key offline; losing it prevents updates.
-- Open a security policy and monitor private reports.
+- Monitor GitHub security advisories and private reports.
 - Do not rewrite published history to remove a leaked secret; rotate it.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## GitHub channel (prepared, not published)
-
-- Remote: `https://github.com/wuy489934-svg/DLA.git` (confirm the final repo name before pushing).
-- CI: `.github/workflows/ci.yml` builds web + debug APK on push/PR.
-- Release: `.github/workflows/release.yml` runs on `v*` tags and publishes APK + SHA256; signing is read from repository secrets (see below).
-- Secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
-- Do not commit the JKS or passwords. The workflow is prepared but no tag is pushed in this pass.
-
+- Do not publish to Google Play for 1.x: `QUERY_ALL_PACKAGES`, Accessibility, and Shizuku shell make policy review unlikely.

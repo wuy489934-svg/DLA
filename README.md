@@ -10,9 +10,9 @@ DLA is an independent native Android agent. It is **not** a repackaged official 
 
 ## Status
 
-`1.3.0` — release candidate. Source is prepared; no public release has been published yet. See `CHANGELOG.md` and `RELEASING.md`.
+`1.3.0` — public open-source release. See `CHANGELOG.md` and `RELEASING.md`.
 
-The application id `io.github.dla.agent` is a placeholder for the eventual GitHub owner. Change it before the first public release if the project does not live under that namespace. The Java namespace `com.example.chatdemo` is retained for upgrade/data compatibility; it is not the product identity.
+The application id `io.github.dla.agent` is retained for this release. The Java namespace `com.example.chatdemo` is kept for compatibility; it is not the product identity.
 
 ## Features
 
@@ -35,7 +35,7 @@ The application id `io.github.dla.agent` is a placeholder for the eventual GitHu
 
 ## Install
 
-Download the APK from GitHub Releases (once published) and install it. Because the app requests powerful permissions, Android will warn you. Read `SECURITY.md` first.
+Download the APK from [GitHub Releases](https://github.com/wuy489934-svg/DLA/releases) and install it. Because the app requests powerful permissions, Android will warn you. Read `SECURITY.md` first.
 
 ## Build
 
