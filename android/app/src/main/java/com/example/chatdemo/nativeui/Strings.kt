@@ -139,6 +139,8 @@ object Lang {
         "新对话" to "New chat",
         "会话" to "Session",
         "图片" to "Image",
+    "文件夹批量导入仅 Agent 区可用" to "Folder import is only available in Agent mode",
+    "这个文件夹里没有可导入的文件" to "No importable files in this folder",
         "%d 条" to "%d message|%d messages",
         "%d 轮" to "%d round|%d rounds",
         "%d 步" to "%d step|%d steps",

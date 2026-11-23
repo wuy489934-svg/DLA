@@ -32,6 +32,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -570,6 +571,27 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
             }
         }
     }
+    val folderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { tree ->
+        if (tree != null) {
+            if (ChatEngine.open.value?.mode != "agent") {
+                Toast.makeText(
+                    context,
+                    Lang.t("文件夹批量导入仅 Agent 区可用"),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            } else {
+                SystemFiles.persist(context, tree)
+                val imported = runCatching { SystemFiles.importFolder(context, tree) }.getOrDefault(emptyList())
+                if (imported.isEmpty()) {
+                    Toast.makeText(context, Lang.t("这个文件夹里没有可导入的文件"), Toast.LENGTH_LONG).show()
+                } else {
+                    pendingAttachments = pendingAttachments + imported
+                }
+            }
+        }
+    }
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -718,6 +740,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 },
                 onStop = { ChatEngine.stop() },
                 onPickImage = { runCatching { imagePicker.launch("image/*") } },
+                onPickFolder = { runCatching { folderPicker.launch(null) } },
                 onPickDocument = {
                     runCatching {
                         documentPicker.launch(
@@ -1192,6 +1215,7 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
+    onPickFolder: () -> Unit,
     onPickDocument: () -> Unit,
     onVoice: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -1258,9 +1282,9 @@ private fun Composer(
         }
         Row(verticalAlignment = Alignment.Bottom) {
             ComposerIcon("🖼") { onPickImage() }
-            Spacer(Modifier.width(6.dp))
-            ComposerIcon("📎") { onPickDocument() }
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
+            ComposerIcon("📎", onLongClick = { onPickFolder() }) { onPickDocument() }
+            Spacer(Modifier.width(4.dp))
             ComposerIcon("🎤") { onVoice() }
             Spacer(Modifier.width(8.dp))
             OutlinedTextField(
@@ -1305,17 +1329,31 @@ private fun Composer(
         }
     }
 }
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ComposerIcon(label: String, onClick: () -> Unit) {
+private fun ComposerIcon(
+    label: String,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val click = if (onLongClick == null) {
+        Modifier.androidClickableSimple(onClick)
+    } else {
+        Modifier.combinedClickable(
+            onLongClickLabel = null,
+            onLongClick = onLongClick,
+            onClick = onClick,
+        )
+    }
     Box(
         modifier = Modifier
-            .size(38.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .background(DlaColors.SurfaceHigh)
-            .androidClickableSimple(onClick),
+            .then(click),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 15.sp)
+        Text(label, fontSize = 14.sp)
     }
 }
 @Composable

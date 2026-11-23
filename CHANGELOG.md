@@ -11,9 +11,13 @@
   (`Messenger`), reattaches by event cursor after a crash or recreate, and keeps
   long tasks alive when the UI process is gone.
 - **Stopping a run kills the Termux process tree it started.** Every `run()` gets
-  a `runId`; cancellation sends a second `RUN_COMMAND` that TERMs the process
-  group (with a `pkill -f` fallback) and KILLs it two seconds later, so npm,
-  python, downloads and file writes do not keep running in the background.
+  a `runId` and records the command's pid; cancellation kills that pid, its direct
+  children and any process still carrying the run marker, then KILLs after two
+  seconds, so npm, python, downloads and file writes do not keep running.
+- **Termux wrapper rewritten to stop hanging.** The wrapper no longer uses
+  `set -m` job control or fd redirection (both hang under Termux's shell, which
+  looked like “Termux never returns a result”); it now backgrounds the command,
+  `wait`s for it and writes the pid to a run file.
 - **Offline math and diagrams**: KaTeX 0.16.11 and mermaid 10.9.1 are bundled
   under `assets/renderer/` and served to an isolated WebView that cannot reach
   the network; ordinary Markdown renders natively, so chat rows no longer jump
@@ -23,6 +27,11 @@
 - **Attachments** in the native composer: images (compressed), PDF (rendered page
   by page), docx, and plain text / code files. Several files can be queued at
   once and are shown as removable chips before sending.
+- **Folder batch import**: long-press the attach icon to grant a folder over SAF;
+  the app walks it recursively (max 24 files, depth 3, 8 MB per file), copies the
+  files into `agent-uploads` and attaches them with real paths, so Termux tools
+  can `cat`/`pdftotext`/`unzip` exactly what was imported. The granted tree URI is
+  stored in the `folderUri` preference.
 - **Iteration tree**: rounds, parallel groups, cached results, statuses and
   elapsed time, with click-to-jump to the matching message.
 - **Themes and feedback**: dark / light / follow-system for the native UI, plus
@@ -41,7 +50,7 @@
   `#0A1312` plate, monochrome) generated from `docs/mascot/v1/`; the in-app
   mascot art (`res/drawable-nodpi/mascot_cue.png`, `mascot_moon.png`) comes from
   the same artwork, and all three proposals stay under `docs/mascot/`.
-- VersionCode 31 / versionName 2.0.
+- VersionCode 35 / versionName 2.0.
 
 ## 1.4.1
 

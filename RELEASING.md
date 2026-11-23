@@ -9,7 +9,7 @@ DLA **1.4.1** is the latest published open-source release:
 - Tag: `v1.4.1`
 - APK + `SHA256SUMS` are attached to the Release.
 
-**2.0 is prepared in this tree but not published yet**: `versionCode 31` /
+**2.0 is prepared in this tree but not published yet**: `versionCode 35` /
 `versionName 2.0`, user-facing notes in [`docs/release-notes-2.0.md`](docs/release-notes-2.0.md),
 summary in `CHANGELOG.md`. Nothing is pushed or released as part of that preparation.
 

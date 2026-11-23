@@ -49,6 +49,7 @@ object ChatEngine {
     private const val KEY_AUTO_APPROVE = "autoApprove"
     private const val KEY_SOUND = "sound"
     private const val KEY_THEME = "themeMode"
+    private const val KEY_FOLDER = "folderUri"
     private const val KEY_TTS = "tts"
     private const val KEY_LOCATION = "location"
 
@@ -79,7 +80,6 @@ object ChatEngine {
         prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         store = SessionStore(app)
         attachListener()
-        runCatching { Speaker.ensure(app) }
         refresh()
     }
 
@@ -125,6 +125,11 @@ object ChatEngine {
     var soundEnabled: Boolean
         get() = prefs.getBoolean(KEY_SOUND, true)
         set(value) = prefs.edit().putBoolean(KEY_SOUND, value).apply()
+
+    /** 用户授权的系统文件夹（SAF tree URI），用于 Agent 批量导入 */
+    var folderUri: String?
+        get() = prefs.getString(KEY_FOLDER, null)
+        set(value) = prefs.edit().putString(KEY_FOLDER, value).apply()
 
     /** 主题：dark（默认）/ light / system */
     var themeMode: String

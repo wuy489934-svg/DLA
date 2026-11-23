@@ -297,6 +297,13 @@ public final class TermuxBridge {
      * 4. 命令 cmdline 里带 DLA_RUN_ID=&lt;runId&gt; 前缀，作为 pkill 兜底标记；
      * 5. set -m 期间的作业通知打到 /dev/null，命令自己的 stderr 走 fd 9 正常回传。
      */
+    /**
+     * 包装脚本：只做三件事——记标记、记子进程 pid、等子进程结束并回传退出码。
+     *
+     * 这里刻意不用 `set -m`/fd 重定向：Termux 的 RUN_COMMAND 通过 Runtime.exec 起 bash，
+     * 没有控制终端，job control 在部分 Termux 版本上会让脚本卡在后台作业状态，
+     * 表现为「Termux 没有返回结果」。改成最简单的后台 + wait，兼容性最好。
+     */
     private static String wrapperScript(String runId) {
         return "DLA_RUN_ID='" + runId + "'\n"
                 + "export DLA_RUN_ID\n"
@@ -304,28 +311,24 @@ public final class TermuxBridge {
                 + "mkdir -p \"$DLA_DIR\" 2>/dev/null || true\n"
                 + "DLA_PID_FILE=\"$DLA_DIR/" + runId + ".pid\"\n"
                 + "DLA_BASH='" + BASH + "'\n"
-                + "exec 9>&2\n"
-                + "exec 2>/dev/null\n"
-                + "set -m\n"
-                + "\"$DLA_BASH\" -lc \": " + MARKER_PREFIX + runId + "; $1\" </dev/null 2>&9 &\n"
+                + "\"$DLA_BASH\" -lc \": " + MARKER_PREFIX + runId + "; $1\" </dev/null &\n"
                 + "DLA_CHILD=$!\n"
-                + "set +m\n"
-                + "if kill -0 -- \"-$DLA_CHILD\" 2>/dev/null; then\n"
-                + "  echo \"$DLA_CHILD\" > \"$DLA_PID_FILE\" 2>/dev/null || true\n"
-                + "fi\n"
+                + "echo \"$DLA_CHILD\" > \"$DLA_PID_FILE\" 2>/dev/null || true\n"
                 + "wait \"$DLA_CHILD\"\n"
                 + "DLA_STATUS=$?\n"
-                + "exec 2>&9 9>&-\n"
                 + "rm -f \"$DLA_PID_FILE\" 2>/dev/null || true\n"
                 + "exit \"$DLA_STATUS\"\n";
     }
-
     /**
      * 取消脚本：对每个 runId 先 TERM（进程组 + pkill -f 标记），sleep 2 秒后再 KILL。
      *
      * marker 必须通过 "DLA""_RUN_ID=..." 拼出来，不能写成连续字符串：否则这条
      * 取消命令自己的 cmdline 也会包含 marker，pkill -f 会在 TERM 阶段把执行取消
      * 的 shell 一起杀掉，后面的 KILL 就没机会跑了。
+     */
+    /**
+     * 取消脚本：pid 文件里存的是命令所在的 bash 进程号（不再依赖进程组），
+     * 先杀它和它的直接子进程，再用 marker 兜底扫一遍；2 秒后升级到 KILL。
      */
     private static String killScript(List<String> runIds) {
         StringBuilder script = new StringBuilder();
@@ -335,13 +338,16 @@ public final class TermuxBridge {
         script.append("  DLA_SIG=\"$2\"\n");
         script.append("  DLA_MARK=\"DLA\"\"_RUN_ID=$DLA_ID\"\n");
         script.append("  DLA_FILE=\"$DLA_DIR/$DLA_ID.pid\"\n");
-        script.append("  DLA_GROUP=\"\"\n");
+        script.append("  DLA_PID=\"\"\n");
         script.append("  if [ -f \"$DLA_FILE\" ]; then\n");
-        script.append("    DLA_GROUP=$(cat \"$DLA_FILE\" 2>/dev/null)\n");
-        script.append("    case \"$DLA_GROUP\" in ''|*[!0-9]*) DLA_GROUP= ;; esac\n");
+        script.append("    DLA_PID=$(cat \"$DLA_FILE\" 2>/dev/null)\n");
+        script.append("    case \"$DLA_PID\" in ''|*[!0-9]*) DLA_PID= ;; esac\n");
         script.append("  fi\n");
-        script.append("  if [ -n \"$DLA_GROUP\" ] && kill -0 -- \"-$DLA_GROUP\" 2>/dev/null; then\n");
-        script.append("    kill -\"$DLA_SIG\" -- \"-$DLA_GROUP\" 2>/dev/null || true\n");
+        script.append("  if [ -n \"$DLA_PID\" ]; then\n");
+        script.append("    if command -v pkill >/dev/null 2>&1; then\n");
+        script.append("      pkill -\"$DLA_SIG\" -P \"$DLA_PID\" 2>/dev/null || true\n");
+        script.append("    fi\n");
+        script.append("    kill -\"$DLA_SIG\" \"$DLA_PID\" 2>/dev/null || true\n");
         script.append("  fi\n");
         script.append("  if command -v pkill >/dev/null 2>&1; then\n");
         script.append("    pkill -\"$DLA_SIG\" -f \"$DLA_MARK\" 2>/dev/null || true\n");
@@ -358,7 +364,6 @@ public final class TermuxBridge {
         script.append("exit 0\n");
         return script.toString();
     }
-
     static void complete(int id, Bundle bundle) {
         CompletableFuture<Result> future = PENDING.remove(id);
         if (future == null) {

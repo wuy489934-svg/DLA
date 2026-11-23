@@ -79,7 +79,7 @@ Termux 的边界：执行身份是 DLA 自己的 uid，只能访问 Termux 可�
 ## 6. 停止与恢复
 
 - **停止**：通知栏“停止”按钮、原生/网页界面的停止按钮都会走到 `AgentRuntime.cancel()`；循环在每个工具前后检查取消标志。
-- **Termux 进程树**：停止或本轮结束时调用 `TermuxBridge.cancelAll()`，按 `runId` 先 TERM 进程组（带 `pkill -f` 兜底），2 秒后 KILL，避免 npm/python/下载在 Termux 里继续跑。
+- **Termux 进程清理**：包装器只把命令放后台、`wait`、把 pid 写进 run 文件（不再用 `set -m` 与 fd 重定向，那在 Termux 下会挂住）。停止或本轮结束时 `TermuxBridge.cancelAll()` 按 `runId` 读到子进程 pid，TERM 该 pid、它的直接子进程和仍带 marker 的进程，2 秒后 KILL，避免 npm/python/下载继续跑。
 - **防打转**：连续 5 次完全相同的工具调用会被拦截并返回错误提示（`repeatCount >= 5`）。
 - **界面崩溃**：UI 进程被回收不影响 `:agent` 里的任务，重新打开界面 `AgentClient.attach(id, cursor)` 会把错过的事件补回来。
 - **渲染进程崩溃**：`MainActivity` 处理 `onRenderProcessGone` 并重建 WebView；因为事件接收端已经没了，`rendererGone` 会让运行时停止本次任务。
@@ -107,6 +107,7 @@ android/app/src/main/java/com/example/chatdemo/
   nativeui/MarkdownCompose.kt             普通 Markdown 的原生 Compose 渲染
   nativeui/Markdown.kt                    隔离 WebView：仅加载 assets/renderer 里的 KaTeX / mermaid
   nativeui/SessionStore.kt                files/native-sessions 的会话落盘
+  nativeui/SystemFiles.kt                 SAF 文件夹授权 + 递归列出（24/深度 3/8MB）并导入 agent-uploads
   agent/AgentClient.java                  UI 进程门面：bindService + Messenger + attach 回放
   agent/AgentIpc.java                     跨进程协议常量（MSG_* / KEY_*）
   agent/AccessibilityStatus.java          读 Settings.Secure 判断无障碍是否开启（跨进程有效）
@@ -116,7 +117,7 @@ android/app/src/main/java/com/example/chatdemo/
   agent/LocalTools.java                   手机工具实现（无障碍 / Shizuku）
   agent/ChatDemoAccessibilityService.java 进程内读屏
   agent/ShizukuShell.java                 Shizuku 执行与授权
-  agent/TermuxBridge.java                 Termux RUN_COMMAND 桥（runId / 进程组取消）
+  agent/TermuxBridge.java                 Termux RUN_COMMAND 桥（runId / pid + 子进程取消）
   agent/TermuxResultService.java          RUN_COMMAND 结果回传
   agent/TermuxTools.java                  termux 单工具（status / capabilities / run）
   agent/McpClient.java                    MCP 客户端
