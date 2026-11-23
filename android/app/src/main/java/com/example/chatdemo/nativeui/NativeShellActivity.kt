@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
-import android.speech.RecognizerIntent
 import android.widget.Toast
 import android.graphics.drawable.ColorDrawable
 import android.util.Base64
@@ -13,6 +12,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -541,7 +541,10 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
     val context = LocalContext.current
     var pendingAttachments by remember(current?.id) { mutableStateOf<List<Attachment>>(emptyList()) }
 
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    // 图片：走系统照片选择器，单点直接进相册，不出现 SAF 的「安全访问」界面
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
         if (uri != null) {
             val data = Attachments.dataUrl(context, uri)
             if (data != null) {
@@ -554,12 +557,13 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
             }
         }
     }
-    // 文档：PDF 渲染成页图、docx/文本抽正文，其它类型给提示
-    val documentPicker = rememberLauncherForActivityResult(
+    // 兜底：只有「所有文件访问权限」没给时，授权卡片里才会引导到这两个系统选择器
+    val systemFilePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
-            val extracted = Documents.extract(context, uri)
+            val forAgent = ChatEngine.open.value?.mode == "agent"
+            val extracted = Documents.extract(context, uri, forAgent = forAgent)
             if (extracted.isEmpty()) {
                 Toast.makeText(
                     context,
@@ -571,7 +575,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
             }
         }
     }
-    val folderPicker = rememberLauncherForActivityResult(
+    val systemFolderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { tree ->
         if (tree != null) {
@@ -592,18 +596,8 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
             }
         }
     }
-    val voiceLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val spoken = result.data
-                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()
-            if (!spoken.isNullOrBlank()) {
-                input = if (input.isBlank()) spoken else input.trimEnd() + " " + spoken
-            }
-        }
-    }
+    // 📂 本机文件浏览（替代原来的 SAF 文档/文件夹按钮）
+    var showBrowser by remember(current?.id) { mutableStateOf(false) }
 
     val messages = current?.messages.orEmpty()
     val rows = remember(messages) { buildRows(messages) }
@@ -739,47 +733,47 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                     }
                 },
                 onStop = { ChatEngine.stop() },
-                onPickImage = { runCatching { imagePicker.launch("image/*") } },
-                onPickFolder = { runCatching { folderPicker.launch(null) } },
-                onPickDocument = {
+                onPickImage = {
                     runCatching {
-                        documentPicker.launch(
-                            arrayOf(
-                                "application/pdf",
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                "text/*",
-                                "application/json",
-                            ),
+                        imagePicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                         )
                     }
                 },
-                onVoice = {
-                    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                        putExtra(
-                            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
-                        )
-                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (Lang.isEnglish()) "en-US" else "zh-CN")
-                        putExtra(RecognizerIntent.EXTRA_PROMPT, Lang.t("说出你的问题"))
-                    }
-                    val available = runCatching {
-                        context.packageManager.queryIntentActivities(intent, 0).isNotEmpty()
-                    }.getOrDefault(false)
-                    if (!available) {
-                        Toast.makeText(
-                            context,
-                            Lang.t("本机没有可用的语音识别服务，请安装或在键盘上用语音输入"),
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    } else if (!runCatching { voiceLauncher.launch(intent) }.isSuccess) {
-                        Toast.makeText(context, Lang.t("语音识别启动失败，请稍后重试"), Toast.LENGTH_SHORT).show()
-                    }
-                },
+                onPickFiles = { showBrowser = true },
                 onRemoveAttachment = { index ->
                     pendingAttachments = pendingAttachments.filterIndexed { i, _ -> i != index }
                 },
             )
         }
+    }
+
+    if (showBrowser) {
+        BackHandler { showBrowser = false }
+        FileBrowserPanel(
+            forAgent = current?.mode == "agent",
+            onDismiss = { showBrowser = false },
+            onPicked = { picked ->
+                showBrowser = false
+                if (picked.isEmpty()) {
+                    Toast.makeText(
+                        context,
+                        Lang.t("选中的文件里没有可用的内容"),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                } else {
+                    pendingAttachments = pendingAttachments + picked
+                }
+            },
+            onSystemFilePicker = {
+                showBrowser = false
+                runCatching { systemFilePicker.launch(arrayOf("*/*")) }
+            },
+            onSystemFolderPicker = {
+                showBrowser = false
+                runCatching { systemFolderPicker.launch(null) }
+            },
+        )
     }
 }
 
@@ -1215,9 +1209,7 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPickImage: () -> Unit,
-    onPickFolder: () -> Unit,
-    onPickDocument: () -> Unit,
-    onVoice: () -> Unit,
+    onPickFiles: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
 ) {
     Column(
@@ -1283,9 +1275,7 @@ private fun Composer(
         Row(verticalAlignment = Alignment.Bottom) {
             ComposerIcon("🖼") { onPickImage() }
             Spacer(Modifier.width(4.dp))
-            ComposerIcon("📎", onLongClick = { onPickFolder() }) { onPickDocument() }
-            Spacer(Modifier.width(4.dp))
-            ComposerIcon("🎤") { onVoice() }
+            ComposerIcon("📂") { onPickFiles() }
             Spacer(Modifier.width(8.dp))
             OutlinedTextField(
                 value = value,
@@ -1329,28 +1319,17 @@ private fun Composer(
         }
     }
 }
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ComposerIcon(
     label: String,
-    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
-    val click = if (onLongClick == null) {
-        Modifier.androidClickableSimple(onClick)
-    } else {
-        Modifier.combinedClickable(
-            onLongClickLabel = null,
-            onLongClick = onLongClick,
-            onClick = onClick,
-        )
-    }
     Box(
         modifier = Modifier
             .size(32.dp)
             .clip(CircleShape)
             .background(DlaColors.SurfaceHigh)
-            .then(click),
+            .androidClickableSimple(onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, fontSize = 14.sp)

@@ -92,7 +92,6 @@ public class MainActivity extends Activity {
     private static final String APP_HOST = "appassets.androidplatform.net";
     private static final String START_URL = "https://" + APP_HOST + "/assets/public/index.html";
     private static final int REQUEST_FILE_CHOOSER = 1001;
-    private static final int REQUEST_MICROPHONE = 1002;
     private static final int REQUEST_IMAGE_CAPTURE = 1003;
     private static final int REQUEST_NOTIFICATIONS = 1004;
     private static final String FILE_PROVIDER_SUFFIX = ".fileprovider";
@@ -105,7 +104,6 @@ public class MainActivity extends Activity {
     private WebView webView;
     private WebViewAssetLoader assetLoader;
     private ValueCallback<Uri[]> pendingFileCallback;
-    private PermissionRequest pendingMicRequest;
     private String bridgeScript;
     private Uri cameraOutputUri;
     private File cameraOutputFile;
@@ -274,7 +272,8 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
-                runOnUiThread(() -> grantOrRequestAudio(request));
+                // 语音输入入口已删除：网页壳不再授予任何摄像头/麦克风权限
+                runOnUiThread(request::deny);
             }
 
             @Override
@@ -467,39 +466,6 @@ public class MainActivity extends Activity {
         if (callback != null) {
             callback.onReceiveValue(result);
         }
-    }
-
-    private void grantOrRequestAudio(PermissionRequest request) {
-        for (String resource : request.getResources()) {
-            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-                        == PackageManager.PERMISSION_GRANTED) {
-                    request.grant(new String[]{resource});
-                } else {
-                    pendingMicRequest = request;
-                    requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},
-                            REQUEST_MICROPHONE);
-                }
-                return;
-            }
-        }
-        request.deny();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                                           int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_MICROPHONE || pendingMicRequest == null) {
-            return;
-        }
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            pendingMicRequest.grant(pendingMicRequest.getResources());
-        } else {
-            pendingMicRequest.deny();
-            toast(getString(R.string.microphone_denied));
-        }
-        pendingMicRequest = null;
     }
 
     @Override

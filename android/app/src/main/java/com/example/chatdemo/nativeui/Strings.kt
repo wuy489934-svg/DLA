@@ -166,7 +166,6 @@ object Lang {
         "联网搜索" to "Web search",
         "将随消息一起发送" to "Sent with your message",
         "描述任务或提问…" to "Describe a task or ask a question…",
-        "说出你的问题" to "Say your question",
     "暂不支持这种文件，试试图片、PDF、docx 或文本" to
         "This file type is not supported yet. Try an image, PDF, docx or plain text.",
     "打开系统语音设置" to "Open system speech settings",
@@ -174,9 +173,31 @@ object Lang {
         "Could not open the file picker. Try sharing the file to DLA from your file manager.",
     "文档" to "Document",
     "文本" to "Text",
-    "本机没有可用的语音识别服务，请安装或在键盘上用语音输入" to
-        "No speech recognition service on this device. Install one, or use the keyboard's voice input.",
-    "语音识别启动失败，请稍后重试" to "Could not start speech recognition. Please try again.",
+
+        // ---- 📂 本机文件浏览 ----
+        "选择文件" to "Choose files",
+        "关闭" to "Close",
+        "添加" to "Add",
+        "上一级" to "Up",
+        "文件夹" to "Folder",
+        "内部存储" to "Internal storage",
+        "图库" to "Gallery",
+        "相机" to "Camera",
+        "下载" to "Downloads",
+        "全部" to "All",
+        "搜索当前目录（含子文件夹）" to "Search here and in subfolders",
+        "这个文件夹是空的" to "This folder is empty",
+        "没有匹配的文件" to "No matching files",
+        "点文件名选中，点文件夹进入" to "Tap a file to select, a folder to open",
+        "已选 %d 个" to "%d selected",
+        "导入此文件夹" to "Import this folder",
+        "需要「所有文件访问权限」" to "All-files access is required",
+        "授权后可以直接按路径浏览、搜索并发送本机文件，不需要再走系统的安全访问界面。文件不会被上传，只有你选中的内容会进入对话。" to
+            "With this access DLA can browse and search files by real path, with no system picker in the way. Nothing is uploaded; only what you pick goes into the conversation.",
+        "去授权" to "Grant access",
+        "改用系统文件选择器" to "Use system file picker",
+        "改用系统文件夹选择器" to "Use system folder picker",
+        "选中的文件里没有可用的内容" to "Nothing usable in the selected files",
 
         // ---- 设置：对话 / 人设 ----
         "设置" to "Settings",

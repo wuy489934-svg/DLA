@@ -5,7 +5,6 @@
     <string name="saved_to_downloads">已保存到下载目录：%1$s</string>
     <string name="save_failed">保存失败</string>
     <string name="open_failed">无法打开该文件</string>
-    <string name="microphone_denied">没有麦克风权限，无法录音</string>
     <string name="add_attachment">添加附件</string>
     <string name="action_camera">拍照</string>
     <string name="action_gallery">从相册选择</string>

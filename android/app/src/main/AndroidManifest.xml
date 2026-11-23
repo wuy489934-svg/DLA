@@ -3,9 +3,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- 语音输入：网页调用 getUserMedia({audio:true}) -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 📂 本机文件浏览：按真实路径读文件（Android 11+ 用「所有文件访问权限」，
+         10 及以下退回读存储权限）。不再需要麦克风权限：语音输入入口已删除。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <!-- Agent：后台运行前台服务 + 通知 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -19,8 +22,6 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <!-- Termux RUN_COMMAND：在 Termux 环境执行命令 -->
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
-
-    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />

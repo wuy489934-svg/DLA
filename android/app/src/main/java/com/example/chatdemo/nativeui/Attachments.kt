@@ -37,8 +37,21 @@ object Attachments {
 
     fun dataUrl(context: Context, uri: Uri): String? = runCatching {
         val resolver = context.contentResolver
+        dataUrlFrom { options ->
+            resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+        }
+    }.getOrNull()
+
+    /** 本地文件版本：📂 文件浏览器在拿到全盘访问权限后直接按路径读，不再走 content:// */
+    fun dataUrl(file: java.io.File): String? = runCatching {
+        dataUrlFrom { options ->
+            java.io.FileInputStream(file).use { BitmapFactory.decodeStream(it, null, options) }
+        }
+    }.getOrNull()
+
+    private fun dataUrlFrom(decode: (BitmapFactory.Options) -> Bitmap?): String? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        decode(bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
         var sample = 1
@@ -46,8 +59,7 @@ object Attachments {
             sample *= 2
         }
         val options = BitmapFactory.Options().apply { inSampleSize = sample }
-        val decoded = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
-            ?: return null
+        val decoded = decode(options) ?: return null
 
         val longest = maxOf(decoded.width, decoded.height)
         val scaled = if (longest <= MAX_EDGE) {
@@ -68,8 +80,8 @@ object Attachments {
         if (scaled !== decoded) decoded.recycle()
         scaled.recycle()
         if (bytes.isEmpty()) return null
-        "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-    }.getOrNull()
+        return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
 
     /** data URL -> Bitmap；失败返回 null，UI 显示占位 */
     fun decode(dataUrl: String): Bitmap? = runCatching {
