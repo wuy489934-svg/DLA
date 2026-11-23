@@ -42,6 +42,18 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|locale|layoutDirection"
             android:exported="true"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".ImageViewerActivity"
+            android:exported="false"
+            android:theme="@style/ViewerTheme" />
+
+        <!-- 原生 Compose 壳（方案 B）：默认入口；网页界面降级为可选外壳 -->
+        <activity
+            android:name=".nativeui.NativeShellActivity"
+            android:exported="true"
+            android:theme="@style/NativeTheme"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -49,14 +61,10 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".ImageViewerActivity"
-            android:exported="false"
-            android:theme="@style/ViewerTheme" />
-
         <!-- Agent 运行期间保活；循环本身在 AgentRuntime 线程里 -->
         <service
             android:name=".agent.AgentService"
+            android:process=":agent"
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="specialUse|dataSync">
@@ -64,6 +72,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="本地 Agent 长时任务执行" />
         </service>
+
+        <!-- 接收 Termux RUN_COMMAND 结果 -->
+        <service
+            android:name=".agent.TermuxResultService"
+            android:process=":agent"
+            android:exported="false" />
 
         <!-- 开机/升级后恢复未完成 Agent 任务 -->
         <receiver
@@ -85,6 +99,7 @@
         <!-- 进程内读屏服务；不 fork uiautomator -->
         <service
             android:name=".agent.ChatDemoAccessibilityService"
+            android:process=":agent"
             android:exported="true"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
@@ -114,11 +129,6 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
-
-        <!-- 接收 Termux RUN_COMMAND 的执行结果 -->
-        <service
-            android:name=".agent.TermuxResultService"
-            android:exported="false" />
     </application>
 
 </manifest>

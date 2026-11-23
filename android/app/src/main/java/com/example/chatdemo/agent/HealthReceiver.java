@@ -13,8 +13,7 @@ public class HealthReceiver extends BroadcastReceiver {
             AgentKeepAlive.cancelHealth(context);
             return;
         }
-        if (AgentRuntime.get().resumeIfNeeded(context)) {
-            AgentKeepAlive.scheduleHealth(context);
-        }
+        AgentService.requestResume(context);
+        AgentKeepAlive.scheduleHealth(context);
     }
 }

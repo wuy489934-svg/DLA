@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DLA 图标底板：深青色竖向渐变，与 App 主界面同一基调 -->
+<!-- DLA 2.0 图标底板：v1 Cue 的深墨绿 #0A1312，与 App 深色背景同一色 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <gradient
-        android:angle="270"
-        android:endColor="#0E1B1A"
-        android:startColor="#16302B" />
+    <solid android:color="#0A1312" />
 </shape>

@@ -192,6 +192,14 @@ public final class AgentRunner {
                 // 连接可能已关闭
             }
         }
+        // cancelled 只是让本线程不再等待。Termux 里的命令是 Termux 进程 fork 出来的，
+        // 和本线程没有父子关系，光置标志它会继续跑（npm/python/写文件都可能还在进行），
+        // 所以必须按 runId 主动把 Termux 里的整棵进程树杀掉。
+        try {
+            TermuxBridge.cancelAll(context);
+        } catch (Throwable ignored) {
+            // cancelAll 自身已兜底，这里再防一层，绝不打断停止流程
+        }
     }
 
     /** 网页审批结果；toolId 对应 tool_start 事件里的 id */
@@ -422,6 +430,14 @@ public final class AgentRunner {
             emit(event);
         } finally {
             activeConnection = null;
+            // 正常结束/异常/取消统一收尾：Termux 里若还有本次运行残留的进程就杀掉，
+            // 然后清空 active，避免留下再也无法取消的 runId。
+            try {
+                TermuxBridge.cancelAll(context);
+            } catch (Throwable ignored) {
+                // cancelAll 自身已兜底
+            }
+            TermuxBridge.clearActive();
         }
     }
 

@@ -6,18 +6,19 @@
 
 | 步骤 | 发生什么 | 代码 |
 |---|---|---|
-| 1 | 用户在 Agent 区输入任务，网页组装 payload（model、apiKey、apiOrigin、system、messages、mcpServerIds、autoApprove、maxRounds） | `web/src/services/chat/store.ts` → `startAgent()` |
-| 2 | 通过 `AndroidHost.agentStart(requestId, payloadJson)` 进入原生层 | `web/src/services/agent/bridge.ts` |
-| 3 | 准入判定：Shizuku 就绪 **或** Termux 可用才放行；两者都缺直接回 `error` 事件并给出两条开启路径 | `android/app/src/main/java/com/example/chatdemo/agent/AgentRuntime.java` `start()` |
-| 4 | 写加密 checkpoint，启动 `AgentService`（specialUse FGS + 通知停止按钮） | `AgentRuntime`、`AgentService.java`、`AgentCheckpoint.java` |
-| 5 | 建立工具集：探测可用性 → 注入核心工具 → 注册可按需发现的工具 → 连接 MCP | `AgentRunner.connectTools()` |
-| 6 | 进入循环：`streamRound()` 发请求 → 解析文本/思考/`tool_use` → 执行工具 → 把结果作为 `tool_result` 追加 → 下一轮 | `AgentRunner.run()` |
-| 7 | 每轮的事件通过 `emit()` 推给 WebView（`window.__agentEvent`），网页按事件渲染 | `MainActivity.HostBridge` |
-| 8 | 结束：`done` / `stopped` / `error`；清 checkpoint，停服务 | `AgentRuntime.finish()` |
+| 1 | 用户输入任务，界面组装 payload（model、apiKey、apiOrigin、system、messages、mcpServerIds、autoApprove、maxRounds）。原生界面在 `ChatEngine` 里组装，网页界面在 `store.ts` | `android/.../nativeui/ChatEngine.kt`、`web/src/services/chat/store.ts` | 
+| 2 | 原生界面 `AgentClient.start()`；网页界面经 `AndroidHost.agentStart(requestId, payloadJson)` | `nativeui/ChatEngine.kt`、`web/src/services/agent/bridge.ts`、`MainActivity.HostBridge` |
+| 3 | 跨进程：`AgentClient` 通过 `bindService` + `Messenger` 把指令发给 `:agent` 进程的 `AgentService` | `agent/AgentClient.java`、`agent/AgentIpc.java` |
+| 4 | 准入判定：Shizuku 就绪 **或** Termux 可用才放行；两者都缺直接回 `error` 事件并给出两条开启路径 | `agent/AgentRuntime.java` `start()` |
+| 5 | 写加密 checkpoint，启动 `AgentService`（specialUse FGS + 通知停止按钮） | `AgentRuntime`、`AgentService.java`、`AgentCheckpoint.java` |
+| 6 | 建立工具集：探测可用性 → 注入核心工具 → 注册可按需发现的工具 → 连接 MCP | `AgentRunner.connectTools()` |
+| 7 | 进入循环：`streamRound()` 发请求 → 解析文本/思考/`tool_use` → 执行工具 → 把结果作为 `tool_result` 追加 → 下一轮 | `AgentRunner.run()` |
+| 8 | 每轮的事件经 `AgentService.broadcast()` → `AgentClient` 回调给界面（网页再转成 `window.__agentEvent`），按事件渲染 | `AgentService`、`AgentClient`、`nativeui/ChatEngine.kt` |
+| 9 | 结束：`done` / `stopped` / `error`；清 checkpoint，停服务 | `AgentRuntime.finish()` |
 
 ## 2. 事件协议
 
-原生 → 网页的事件都是 JSON，第二个字段是类型。网页侧消费见 `web/src/services/agent/bridge.ts`。
+原生 → 界面的事件都是 JSON，第二个字段是类型。两个界面用同一套事件：原生在 `ChatEngine` 里更新 Compose 状态，网页侧消费见 `web/src/services/agent/bridge.ts`。跨进程时事件由 `AgentService` 打成 `MSG_EVENT`（`requestId` + `json`）。
 
 | type | 关键字段 | 说明 |
 |---|---|---|
@@ -30,7 +31,7 @@
 | `usage` | token 统计、TTFT | 用量与首字延迟 |
 | `done` / `stopped` / `error` | `stop_reason` / `message` | 终止事件 |
 
-审批方向相反：网页调用 `AndroidHost.agentApprove(toolId, allowed)`，原生 `AgentRunner.approve()` 唤醒等待队列。
+审批方向相反：界面调用 `AgentClient.approve(id, toolId, allowed)`（网页再包一层 `AndroidHost.agentApprove`），`:agent` 进程里的 `AgentRunner.approve()` 唤醒等待队列。
 等待上限 120 秒（`awaitApproval()`），超时按“未执行”处理。
 
 ## 3. 工具注入与按需发现
@@ -68,7 +69,8 @@ Termux 的边界：执行身份是 DLA 自己的 uid，只能访问 Termux 可�
 
 | 数据 | 位置 | 说明 |
 |---|---|---|
-| 会话与消息 | WebView IndexedDB | 权威存储 |
+| 会话与消息（原生界面） | `files/native-sessions/<id>.json`（`SessionStore.kt`） | 原生界面的权威存储；首次启动只补缺失地导入 `host-sessions` |
+| 会话与消息（网页界面） | WebView IndexedDB | 网页界面的权威存储 |
 | 会话镜像 | `files/host-sessions/*.json` | IndexedDB 为空时用于恢复；只含文本与元数据 |
 | 诊断 | `files/diagnostics/events.log` | 环形日志（256KB），只记事件名与异常栈，不记消息正文 |
 | 设置 | SharedPreferences / localStorage | API Key 只在本机；不上报 |
@@ -76,9 +78,12 @@ Termux 的边界：执行身份是 DLA 自己的 uid，只能访问 Termux 可�
 
 ## 6. 停止与恢复
 
-- **停止**：通知栏“停止”按钮、Agent UI 的停止按钮都会调用 `AgentRuntime.cancel()`；循环在每个工具前后检查取消标志。
+- **停止**：通知栏“停止”按钮、原生/网页界面的停止按钮都会走到 `AgentRuntime.cancel()`；循环在每个工具前后检查取消标志。
+- **Termux 进程树**：停止或本轮结束时调用 `TermuxBridge.cancelAll()`，按 `runId` 先 TERM 进程组（带 `pkill -f` 兜底），2 秒后 KILL，避免 npm/python/下载在 Termux 里继续跑。
 - **防打转**：连续 5 次完全相同的工具调用会被拦截并返回错误提示（`repeatCount >= 5`）。
-- **崩溃恢复**：`MainActivity` 处理 `onRenderProcessGone`，重建 WebView；会话从 IndexedDB 或 `host-sessions` 镜像恢复。
+- **界面崩溃**：UI 进程被回收不影响 `:agent` 里的任务，重新打开界面 `AgentClient.attach(id, cursor)` 会把错过的事件补回来。
+- **渲染进程崩溃**：`MainActivity` 处理 `onRenderProcessGone` 并重建 WebView；因为事件接收端已经没了，`rendererGone` 会让运行时停止本次任务。
+- **开机/升级恢复**：`BootReceiver` / `HealthReceiver` 以 `ACTION_RESUME` 启动服务，由 `:agent` 进程里的 `AgentRuntime.resumeIfNeeded()` 从 checkpoint 重跑。
 
 ## 7. 安全边界
 
@@ -96,17 +101,27 @@ web/src/components/chatInput/ChatInput.tsx 准入判定（Shizuku 或 Termux）�
 
 android/app/src/main/java/com/example/chatdemo/
   MainActivity.java                       WebView 宿主与 HostBridge（@JavascriptInterface）
+  nativeui/ChatEngine.kt                  原生界面的请求组装、事件消费与会话状态
+  nativeui/NativeShellActivity.kt         原生 Compose 界面（会话 / 聊天 / 设置）
+  nativeui/MarkdownCompose.kt             普通 Markdown 的原生 Compose 渲染
+  nativeui/Markdown.kt                    隔离 WebView：仅加载 assets/renderer 里的 KaTeX / mermaid
+  nativeui/SessionStore.kt                files/native-sessions 的会话落盘
+  agent/AgentClient.java                  UI 进程门面：bindService + Messenger + attach 回放
+  agent/AgentIpc.java                     跨进程协议常量（MSG_* / KEY_*）
+  agent/AccessibilityStatus.java          读 Settings.Secure 判断无障碍是否开启（跨进程有效）
   agent/AgentRuntime.java                 单实例状态、准入、事件缓冲、checkpoint
-  agent/AgentService.java                 前台服务与通知停止
+  agent/AgentService.java                 前台服务、Messenger 分发与通知停止
   agent/AgentRunner.java                  Agent 循环、工具注入与调度、审批、缓存
   agent/LocalTools.java                   手机工具实现（无障碍 / Shizuku）
   agent/ChatDemoAccessibilityService.java 进程内读屏
   agent/ShizukuShell.java                 Shizuku 执行与授权
-  agent/TermuxBridge.java                 Termux RUN_COMMAND 桥
+  agent/TermuxBridge.java                 Termux RUN_COMMAND 桥（runId / 进程组取消）
   agent/TermuxResultService.java          RUN_COMMAND 结果回传
   agent/TermuxTools.java                  termux 单工具（status / capabilities / run）
   agent/McpClient.java                    MCP 客户端
   agent/WebTools.java                     官方联网（search / fetch）
   agent/TaskTools.java                    计划与笔记
   agent/Diagnostics.java                  环形诊断日志
+
+android/app/src/main/assets/renderer/     KaTeX 0.16.11 + mermaid 10.9.1（离线、只读）
 ```

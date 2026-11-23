@@ -48,7 +48,8 @@ import androidx.webkit.WebViewAssetLoader;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import com.example.chatdemo.agent.AgentRuntime;
+import com.example.chatdemo.agent.AccessibilityStatus;
+import com.example.chatdemo.agent.AgentClient;
 import com.example.chatdemo.agent.LocalTools;
 import com.example.chatdemo.agent.McpClient;
 import com.example.chatdemo.agent.McpStore;
@@ -152,9 +153,12 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         syncSystemBars(dark);
-        AgentRuntime.get().setListener(this::postAgentEvent);
+        AgentClient.get().connect(this);
+        AgentClient.get().setListener(this::postAgentEvent);
         // 如果是被系统/开机中断的任务，回到 App 时自动恢复
-        AgentRuntime.get().resumeIfNeeded(this);
+        if (AgentClient.hasPendingWork(this)) {
+            AgentClient.get().resume(this);
+        }
         try {
             Shizuku.addRequestPermissionResultListener(shizukuPermissionListener);
         } catch (Throwable ignored) {
@@ -240,7 +244,7 @@ public class MainActivity extends Activity {
                         "renderer_gone",
                         "didCrash=" + detail.didCrash()
                 );
-                AgentRuntime.get().onRendererGone();
+                AgentClient.get().rendererGone();
                 runOnUiThread(() -> {
                     if (v == webView) {
                         recreateWebView();
@@ -553,7 +557,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        AgentRuntime.get().setListener(null);
+        AgentClient.get().setListener(null);
         try {
             Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         } catch (Throwable ignored) {
@@ -1061,23 +1065,23 @@ public class MainActivity extends Activity {
                             REQUEST_NOTIFICATIONS);
                 }
             });
-            AgentRuntime.get().start(getApplicationContext(), requestId, payload);
+            AgentClient.get().start(getApplicationContext(), requestId, payload);
         }
 
         @JavascriptInterface
         public void agentStop(String requestId) {
-            AgentRuntime.get().stop(requestId);
+            AgentClient.get().stop(requestId);
         }
 
         @JavascriptInterface
         public void agentApprove(String requestId, String toolId, boolean allowed) {
-            AgentRuntime.get().approve(requestId, toolId, allowed);
+            AgentClient.get().approve(requestId, toolId, allowed);
         }
 
         /** 页面恢复时按游标回放事件 */
         @JavascriptInterface
         public String agentAttach(String requestId, int cursor) {
-            return AgentRuntime.get().attach(requestId, cursor);
+            return AgentClient.get().attach(requestId, cursor);
         }
 
         private final Map<String, FileOutputStream> attachmentOutputs = new HashMap<>();

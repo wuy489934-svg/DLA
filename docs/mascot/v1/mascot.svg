@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Cue — Terminal Sprite</title>
+  <desc id="desc">A friendly terminal-window creature with cursor eyes, a block-cursor antenna and an apricot command bar. Hand-drawn from flat shapes only.</desc>
+  <metadata>DLA mascot concept v1 / Cue. Palette: ink #0A1312, mint #7FE7C4, mint shade #4FC9A8, deep teal #0F3A32, warm apricot #FFC48A. Built on a 1024 px grid. No gradients, external fonts, images, text or effects. Groups are separated for blink, run, wait and loading animation. Silhouette is tested at 24 dp.</metadata>
+  <!-- block-cursor antenna, a caret waiting for the next command -->
+  <g id="antenna">
+    <rect x="489" y="102" width="46" height="82" rx="11" fill="#FFC48A" transform="rotate(7 512 143)"/>
+    <path d="M512 246 L514 174" fill="none" stroke="#4FC9A8" stroke-width="20" stroke-linecap="round"/>
+  </g>
+  <!-- blocky side arms and mitten hands -->
+  <g id="arms">
+    <path d="M212 552 C158 560 128 596 118 632" fill="none" stroke="#7FE7C4" stroke-width="58" stroke-linecap="round"/>
+    <rect x="76" y="606" width="82" height="80" rx="22" fill="#4FC9A8"/>
+    <rect x="92" y="620" width="20" height="20" rx="7" fill="#9DF1D8" opacity=".75"/>
+    <path d="M812 550 C854 538 878 510 886 486" fill="none" stroke="#7FE7C4" stroke-width="58" stroke-linecap="round"/>
+    <rect x="848" y="420" width="80" height="84" rx="22" fill="#4FC9A8"/>
+    <rect x="864" y="435" width="20" height="20" rx="7" fill="#9DF1D8" opacity=".75"/>
+  </g>
+  <!-- two block feet keep the shell grounded without an outline -->
+  <g id="feet">
+    <rect x="330" y="756" width="152" height="102" rx="34" fill="#4FC9A8"/>
+    <rect x="542" y="756" width="152" height="102" rx="34" fill="#4FC9A8"/>
+  </g>
+  <!-- terminal shell and screen -->
+  <g id="shell">
+    <rect x="176" y="242" width="672" height="552" rx="132" fill="#7FE7C4"/>
+    <path d="M308 266 C402 236 622 236 716 266" fill="none" stroke="#C9FCEB" stroke-width="14" stroke-linecap="round" opacity=".45"/>
+    <rect x="238" y="320" width="548" height="380" rx="84" fill="#0A1312"/>
+    <circle cx="286" cy="282" r="13" fill="#0F3A32"/>
+    <circle cx="334" cy="282" r="13" fill="#0F3A32"/>
+    <circle cx="382" cy="282" r="13" fill="#0F3A32"/>
+  </g>
+  <!-- cursor eyes and the warm waiting-input bar -->
+  <g id="face">
+    <rect x="371" y="450" width="76" height="128" rx="22" fill="#7FE7C4"/>
+    <rect x="577" y="450" width="76" height="128" rx="22" fill="#7FE7C4"/>
+    <rect x="390" y="468" width="17" height="29" rx="8" fill="#D9FFF3" opacity=".9"/>
+    <rect x="596" y="468" width="17" height="29" rx="8" fill="#D9FFF3" opacity=".9"/>
+    <rect x="441" y="638" width="142" height="48" rx="24" fill="#FFC48A"/>
+  </g>
+  <!-- Design note: the screen itself is the face; no literal prompt glyph is used, so the character stays language-neutral. -->
+  <!-- Usage: home = full body; empty = peeking above the composer; loading = eyes blink as two carets, the warm bar steps through three widths. -->
+</svg>

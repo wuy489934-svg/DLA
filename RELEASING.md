@@ -2,13 +2,16 @@
 
 ## Current release
 
-DLA **1.3.0** is published as an open-source GitHub Release:
+DLA **1.4.1** is the latest published open-source release:
 
 - Repository: https://github.com/wuy489934-svg/DLA
-- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v1.3.0
-- Tag: `v1.3.0`
-- VersionCode 19 / versionName 1.3.0
+- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v1.4.1
+- Tag: `v1.4.1`
 - APK + `SHA256SUMS` are attached to the Release.
+
+**2.0 is prepared in this tree but not published yet**: `versionCode 31` /
+`versionName 2.0`, user-facing notes in [`docs/release-notes-2.0.md`](docs/release-notes-2.0.md),
+summary in `CHANGELOG.md`. Nothing is pushed or released as part of that preparation.
 
 ## Build locally
 
@@ -45,17 +48,19 @@ EOF
 ## Publishing a follow-up release
 
 1. Update `versionCode` / `versionName` in `android/app/build.gradle`.
-2. Update the web `package.json` version.
-3. Update `CHANGELOG.md`.
-4. Commit and push `main`; confirm CI is green.
-5. Create and push a tag:
+2. Update the web `package.json` version and `README.md` if the feature set changed.
+3. Update `CHANGELOG.md` and `docs/release-notes-<version>.md`.
+4. Build locally (`./gradlew assembleRelease`) and record the APK
+   `package / versionCode / versionName` plus its SHA-256.
+5. Commit and push `main`; confirm CI is green.
+6. Create and push a tag:
 
 ```bash
-git tag -a v1.3.1 -m "DLA 1.3.1"
-git push origin v1.3.1
+git tag -a v2.0 -m "DLA 2.0"
+git push origin v2.0
 ```
 
-6. Wait for the `release` workflow and verify the APK signature and SHA-256.
+7. Wait for the `release` workflow and verify the APK signature and SHA-256.
 
 ## After publishing
 

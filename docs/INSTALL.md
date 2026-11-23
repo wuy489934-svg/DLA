@@ -1,8 +1,10 @@
 # 安装与首次配置（Android）
 
+> 2.0 起默认进入**原生 Compose 界面**；网页界面保留为兼容外壳，可在 设置 → 更多 → 打开网页界面 进入。
+
 ## 1. 要求
 
-- Android 9（API 29）及以上；targetSdk 36。
+- Android 10（API 29）及以上；targetSdk 36。
 - 你自己的 DeepSeek 兼容 API Key（DLA 不提供、不代管、不转售 Key）。
 - 至少一个执行后端：
   - **Shizuku**（推荐）：提供 uid 2000 的 shell 能力；
@@ -62,7 +64,7 @@ adb install -r DLA.apk
 
 ### 5.1 API Key
 
-DLA → 设置 → 数据管理 → 填入 API Key → 确定。
+DLA → 设置 → 模型接口 → 填入 API Key → 保存。
 Key 只保存在本机；Agent 与 LLM 请求都直接用你的 Key 访问你配置的端点。
 
 模型接口默认使用 DeepSeek：Base URL / 模型留空即用内置默认值，也可以自己填写兼容端点。
@@ -71,7 +73,7 @@ Key 只保存在本机；Agent 与 LLM 请求都直接用你的 Key 访问你配
 
 1. 安装 [Shizuku](https://shizuku.rikka.app/)。
 2. 用 **无线调试**（Android 11+）或数据线启动 Shizuku 服务；手机重启后需要重新启动。
-3. 打开 DLA → 设置 → Agent → 手机能力 → 授权。
+3. 打开 DLA → 设置 → 更多 → MCP / Termux / 数据管理 → 手机能力（Shizuku） → 授权。
 4. 需要读屏的话，到系统设置里开启 DLA 的无障碍服务。
 
 ### 5.3 Termux（可选，二者其一）
@@ -92,17 +94,20 @@ echo "allow-external-apps=true" >> ~/.termux/termux.properties && termux-reload-
 adb shell pm grant io.github.dla.agent com.termux.permission.RUN_COMMAND
 ```
 
-4. 可选：DLA → 设置 → Agent → Termux 环境 → 「一键安装环境」，会安装 Node.js、Python、git、ripgrep
+4. 可选：DLA → 设置 → 更多 → MCP / Termux / 数据管理 → Termux 环境 → 「一键安装环境」，会安装 Node.js、Python、git、ripgrep
    （优先清华/中科大镜像，npm 用 npmmirror，pip 用清华 PyPI）。
 
 > MIUI 会拦截后台跨应用启动 Termux 的服务。点「一键安装环境」或「测试 Termux」时，先让 Termux 在前台，
 > DLA 已经会在执行前把 Termux 切到前台并做 8 秒探针。
 
+> 2.0 起，点「停止」会把本次运行在 Termux 里 fork 出的整棵进程树一起结束（先 TERM，2 秒后 KILL），
+> 不会在后台继续跑 npm / python / 下载。
+
 ### 5.4 验证
 
-- 设置 → Agent → 手机能力：显示「已就绪」。
-- 设置 → Agent → Termux 环境 → 「测试 Termux」：返回 `DLA_TERMUX_OK` 与版本号。
-- 回到首页选「Agent 任务」，随便让它做一件小事（例如“报告电量”）。只要 Shizuku 或 Termux 有一个可用就能发送。
+- 设置 → 更多 → 手机能力（Shizuku）：显示「已就绪」。
+- 设置 → 更多 → Termux 环境 → 「测试 Termux」：返回 `DLA_TERMUX_OK` 与版本号。
+- 返回首页新建对话，把模式切到「Agent 任务」，随便让它做一件小事（例如“报告电量”）。只要 Shizuku 或 Termux 有一个可用就能发送。
 
 ## 6. 升级
 

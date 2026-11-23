@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.0
+
+- **Native Jetpack Compose UI** replaces the WebView as the default surface:
+  session list, chat, streaming, approval cards, iteration tree and settings are
+  all native. The web UI is kept as a compatibility shell and can still be opened
+  from Settings → Interface.
+- **The Agent now runs in its own `:agent` process.** `AgentService` hosts the run
+  behind a foreground service; the UI talks to it through `AgentClient`
+  (`Messenger`), reattaches by event cursor after a crash or recreate, and keeps
+  long tasks alive when the UI process is gone.
+- **Stopping a run kills the Termux process tree it started.** Every `run()` gets
+  a `runId`; cancellation sends a second `RUN_COMMAND` that TERMs the process
+  group (with a `pkill -f` fallback) and KILLs it two seconds later, so npm,
+  python, downloads and file writes do not keep running in the background.
+- **Offline math and diagrams**: KaTeX 0.16.11 and mermaid 10.9.1 are bundled
+  under `assets/renderer/` and served to an isolated WebView that cannot reach
+  the network; ordinary Markdown renders natively, so chat rows no longer jump
+  when the list recycles them.
+- **Bilingual UI** (Chinese / English, follow-system by default) for the native
+  surface, including errors and approval prompts.
+- **Attachments** in the native composer: images (compressed), PDF (rendered page
+  by page), docx, and plain text / code files.
+- **Iteration tree**: rounds, parallel groups, cached results, statuses and
+  elapsed time, with click-to-jump to the matching message.
+- **Themes and feedback**: dark / light / follow-system for the native UI, plus
+  optional UI sounds and system TTS read-aloud.
+- Mirror mode is kept as code only: the public build ships **no** persona text or
+  portrait, and the settings page shows “no built-in persona” when the assets are
+  absent. No persona assets, API keys, keystores or local paths are included.
+- New original **v1 Cue** launcher icon (square, round, adaptive foreground on a
+  `#0A1312` plate, monochrome) generated from `docs/mascot/v1/`; the v2/v3
+  proposals are kept under `docs/mascot/` for future selection.
+- VersionCode 31 / versionName 2.0.
+
 ## 1.4.1
 
 - Added optional **Termux** execution backend: a single `termux` tool

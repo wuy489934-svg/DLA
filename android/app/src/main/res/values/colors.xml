@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="app_background">#FFFFFFFF</color>
+    <!-- 原生壳的底色，与 Compose 主题保持一致，避免首帧白闪 -->
+    <color name="native_background">#FF0A1312</color>
 </resources>

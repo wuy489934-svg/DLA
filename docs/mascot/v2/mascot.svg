@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Ming — Deep Sea Beacon</title>
+  <desc id="desc">A quiet manta-like lightkeeper with a faceted lantern heart, a warm lure and one flowing tail. Flat shapes, no outline dependency.</desc>
+  <metadata>DLA mascot concept v2 / Ming. Palette: ink #0A1312, mint #7FE7C4, mint light #A9F5DF, mint shade #4FC9A8, deep teal #12332C, pale light #D5FFF2, warm apricot #FFC48A. Built on a 1024 px grid. Every form is a filled silhouette; no thin outline or gradient carries the shape. Groups are separated for lure glow, core pulse and tail drift. Tested at 24 dp in mono.</metadata>
+  <!-- flowing tail, an asymmetric counterweight to the lure -->
+  <g id="tail">
+    <path d="M488 700 C462 782 490 844 554 888 C583 907 622 916 654 912 C610 886 578 856 558 820 C534 778 532 738 542 700 Z" fill="#7FE7C4"/>
+  </g>
+  <!-- antenna lure: a warm wick inside a pale beacon -->
+  <g id="lure">
+    <path d="M512 280 C472 238 414 214 330 220" fill="none" stroke="#7FE7C4" stroke-width="20" stroke-linecap="round"/>
+    <circle cx="318" cy="222" r="44" fill="#D5FFF2"/>
+    <circle cx="318" cy="222" r="17" fill="#FFC48A"/>
+  </g>
+  <!-- manta silhouette, broad enough to survive small sizes -->
+  <g id="wings">
+    <path d="M512 238 C584 238 640 278 694 320 C754 366 824 392 894 416 C850 462 790 492 724 506 C662 518 614 548 580 602 C558 638 542 684 532 736 C526 748 520 754 512 760 C504 754 498 748 492 736 C482 684 466 638 444 602 C410 548 362 518 300 506 C234 492 174 462 130 416 C200 392 270 366 330 320 C384 278 440 238 512 238 Z" fill="#7FE7C4"/>
+    <path d="M512 238 C440 238 384 278 330 320 C270 366 200 392 130 416 C196 420 260 434 318 460 C364 402 418 352 476 318 C492 308 506 292 512 278 Z" fill="#A9F5DF" opacity=".5"/>
+    <path d="M512 238 C584 238 640 278 694 320 C754 366 824 392 894 416 C828 420 764 434 706 460 C660 402 606 352 548 318 C532 308 518 292 512 278 Z" fill="#A9F5DF" opacity=".5"/>
+  </g>
+  <!-- deep body, a shadow held between two wings -->
+  <g id="body">
+    <path d="M512 286 C598 314 642 390 630 472 C620 552 578 620 512 752 C446 620 404 552 394 472 C382 390 426 314 512 286 Z" fill="#12332C"/>
+  </g>
+  <!-- faceted lantern heart, the only warm point at the centre -->
+  <g id="lantern">
+    <path d="M512 368 C580 388 612 438 600 492 C588 546 544 574 512 596 C480 574 436 546 424 492 C412 438 444 388 512 368 Z" fill="#D5FFF2"/>
+    <path d="M512 420 L536 500 L512 558 L488 500 Z" fill="#7FE7C4" opacity=".65"/>
+    <circle cx="512" cy="500" r="18" fill="#FFC48A"/>
+  </g>
+  <!-- broad underwing facets add depth with shape, not texture -->
+  <g id="underwing">
+    <path d="M152 429 C214 463 272 502 322 554 C374 608 412 670 440 732 C408 672 370 620 326 578 C274 528 218 492 152 468 Z" fill="#4FC9A8" opacity=".9"/>
+    <path d="M872 429 C810 463 752 502 702 554 C650 608 612 670 584 732 C616 672 654 620 698 578 C750 528 806 492 872 468 Z" fill="#4FC9A8" opacity=".9"/>
+  </g>
+  <!-- Usage: home = drifting above the input; empty = lure and core breath at low speed; loading = a mint current travels along the tail. -->
+</svg>

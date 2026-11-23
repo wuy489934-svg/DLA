@@ -6,7 +6,7 @@ DLA = **DeepSeek LLM Agent**，是一个运行在 Android 系统内的本地智�
 
 - 原生 Android 工具层：无障碍、PackageManager、Shizuku、文件/设置/截图
 - 原生 Agent 引擎：流式请求、工具调度、并行组、迭代树、checkpoint
-- WebView UI：聊天、Agent 事件、上下文与用量展示
+- 原生 Compose 界面：会话、聊天、审批、迭代树、设置（2.0 起默认；网页界面保留为兼容外壳）
 - 本地优先：会话/设置/诊断在本机；API 请求直达用户配置的端点
 
 ## 不是什么
@@ -18,7 +18,7 @@ DLA = **DeepSeek LLM Agent**，是一个运行在 Android 系统内的本地智�
 
 ## 设计约束
 
-1. **原生优先**：能用 Android API 就不 fork 新进程。
+1. **原生优先**：能用 Android API 就不 fork 子系统进程；Agent 单独跑在 `:agent` 进程，只为把任务与界面崩溃隔离，不是新的运行时。
 2. **系统内运行**：前台服务、无障碍、Shizuku 都在手机内完成。
 3. **小巧但全能**：单 APK，不引入重型运行时。
 4. **可解释**：工具耗时、并行组、缓存、上下文、失败原因对用户可见。
@@ -27,7 +27,8 @@ DLA = **DeepSeek LLM Agent**，是一个运行在 Android 系统内的本地智�
 ## 品牌与素材
 
 - 应用名：DLA
-- 图标：本项目原创（深青底 + 薄荷色终端轮廓 + 暖色星点），预览见 `docs/assets/`
+- 图标与吉祥物：本项目原创 **v1 Cue**（深墨绿 `#0A1312` 底板 + 薄荷色终端小精灵 + 暖色天线/命令条），三版提案与规格见 `docs/mascot/`，预览见 `docs/assets/`
+- 镜子模式：代码保留，但公开版**不内置**人设文本与立绘；资产缺失时界面显示「未内置人设」
 - 上游 Web UI：deepseek-ai/chat-demo，MIT
 - 不包含官方 Demo 的角色素材或未授权插画
 - 存储 key 中保留 `chat-demo:*` 仅用于兼容旧数据，不代表产品身份

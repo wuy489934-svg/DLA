@@ -19,4 +19,14 @@
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 
+    <!-- 原生 Compose 壳：深色底 + 浅色状态栏图标 -->
+    <style name="NativeTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/native_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
 </resources>

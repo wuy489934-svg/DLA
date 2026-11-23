@@ -9,14 +9,21 @@ Upstream web UI
   Copyright (c) 2026 DeepSeek
   MIT License — see licenses/chat-demo-MIT.txt
 
-Launcher icon
-  Original artwork created for DLA (dark teal plate, mint terminal outline,
-  warm spark). No third-party icon set is used. Preview assets in docs/assets/
-  are generated from the same source and carry the project's Apache-2.0 license.
+Launcher icon and mascot
+  Original artwork created for DLA ("v1 Cue": dark #0A1312 plate, mint terminal
+  body, warm antenna and prompt bar). No third-party character artwork or icon
+  set is used. The mascot proposals under docs/mascot/ are generated from the
+  same original artwork and carry the project's Apache-2.0 license.
+
+Bundled renderer assets
+  KaTeX 0.16.11 (MIT) — math typesetting; fonts have their own OFL terms.
+  mermaid 10.9.1 (MIT) — diagrams.
+  Both are shipped under android/app/src/main/assets/renderer/ and served to an
+  isolated WebView that has no network access.
 
 Shizuku
   Copyright RikkaApps
   Apache License 2.0 — see the dependency's license.
 
-Other dependencies (React, KaTeX, Rspack, AndroidX, idb, fflate, etc.)
+Other dependencies (React, Rspack, AndroidX, Kotlin, Compose, idb, fflate, etc.)
 retain their respective licenses. See THIRD_PARTY_NOTICES.md.
