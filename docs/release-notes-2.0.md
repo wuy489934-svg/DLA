@@ -75,7 +75,7 @@ certutil -hashfile DLA.apk SHA256
 ```
 
 APK 的 `package / versionCode / versionName` 应为
-`io.github.dla.agent / 31 / 2.0`。
+`io.github.dla.agent / 36 / 2.0`。
 
 ---
 
