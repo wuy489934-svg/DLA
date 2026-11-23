@@ -47,7 +47,7 @@ android/ (Java + Kotlin, applicationId io.github.dla.agent)
 2. `AgentRuntime` checks availability — **Shizuku or Termux, either one is
    enough** — and refuses only when both are missing.
 3. `AgentRuntime` writes an encrypted checkpoint and starts `AgentService`.
-4. `AgentRunner` builds the tool set: 11 core device actions, `tool_search`, and
+4. `AgentRunner` builds the tool set: 12 core device actions (including `phone_view_image`), `tool_search`, and
    `termux`/local extensions registered for on-demand discovery. Unavailable
    backends are not injected at all.
 5. `AgentRunner` posts to the configured API, parses streamed tool calls.

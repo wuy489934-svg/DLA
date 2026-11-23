@@ -23,6 +23,8 @@ data class SessionCard(
     val rounds: Int,
     val steps: Int,
     val file: File,
+    /** 输入框里有没发出去的草稿：0 条消息时列表要标出来，别看起来像空会话 */
+    val hasDraft: Boolean = false,
 )
 
 /** 消息内容块 */
@@ -81,7 +83,40 @@ data class SessionDetail(
     val mode: String,
     val updatedAt: Long,
     val messages: List<ChatMessage>,
+    /** 输入框里还没发出去的草稿：有草稿的空会话也要保留 */
+    val draft: String = "",
+    /** Agent 的计划/笔记，跨轮次（点「继续」）恢复用 */
+    val taskState: TaskState? = null,
 )
+
+/** Agent 任务状态：计划、当前步、笔记 */
+data class TaskState(
+    val plan: List<String> = emptyList(),
+    val current: Int = 1,
+    val notes: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean get() = plan.isEmpty() && notes.isEmpty()
+}
+
+/**
+ * 耗时显示：1s 以下保留毫秒，1 分钟内保留一位小数，再长就按 m/s。
+ * 之前工具卡直接打印 `${'$'}{elapsedMs}ms`，长任务会出现 1484111ms 这种数字。
+ */
+fun formatElapsed(millis: Long): String = when {
+    millis <= 0 -> ""
+    millis < 1000 -> "${millis}ms"
+    millis < 60_000 -> String.format(java.util.Locale.US, "%.1fs", millis / 1000.0)
+    millis < 3_600_000 -> {
+        val minutes = millis / 60_000
+        val seconds = (millis % 60_000) / 1000
+        "${minutes}m ${seconds}s"
+    }
+    else -> {
+        val hours = millis / 3_600_000
+        val minutes = (millis % 3_600_000) / 60_000
+        "${hours}h ${minutes}m"
+    }
+}
 
 object SessionParser {
 
@@ -92,9 +127,19 @@ object SessionParser {
         val json = JSONObject(file.readText())
         val messages = json.optJSONArray("messages") ?: JSONArray()
         val usage = json.optJSONObject("usageStats")
+        val draft = json.optString("draft")
+        val rawTitle = json.str("title").ifEmpty { "未命名会话" }
+        // 只有草稿、还没发出去的会话：标题直接用草稿开头，一眼能认出是没写完的内容
+        val title = if (messages.length() == 0 && draft.isNotBlank() &&
+            (rawTitle == "新对话" || rawTitle == "未命名会话")
+        ) {
+            Lang.t("草稿") + "：" + draft.replace("\n", " ").take(16)
+        } else {
+            rawTitle
+        }
         SessionCard(
             id = json.str("id").ifEmpty { file.nameWithoutExtension },
-            title = json.str("title").ifEmpty { "未命名会话" },
+            title = title,
             mode = json.str("mode").ifEmpty { "llm" },
             updatedAt = json.optLong("updatedAt", 0L),
             createdAt = json.optLong("createdAt", 0L),
@@ -102,6 +147,7 @@ object SessionParser {
             rounds = usage?.optInt("rounds", 0) ?: 0,
             steps = usage?.optInt("steps", 0) ?: 0,
             file = file,
+            hasDraft = draft.isNotBlank(),
         )
     }.getOrNull()
 
@@ -119,8 +165,22 @@ object SessionParser {
             mode = json.str("mode").ifEmpty { "llm" },
             updatedAt = json.optLong("updatedAt", 0L),
             messages = messages,
+            draft = json.str("draft"),
+            taskState = taskState(json.optJSONObject("taskState")),
         )
     }.getOrNull()
+
+    private fun taskState(json: JSONObject?): TaskState? {
+        if (json == null) return null
+        val plan = json.optJSONArray("plan")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it).ifBlank { null } }
+        } ?: emptyList()
+        val notes = json.optJSONArray("notes")?.let { array ->
+            (0 until array.length()).mapNotNull { array.optString(it).ifBlank { null } }
+        } ?: emptyList()
+        val state = TaskState(plan = plan, current = json.optInt("current", 1), notes = notes)
+        return if (state.isEmpty) null else state
+    }
 
     private fun message(json: JSONObject): ChatMessage {
         val role = json.str("role")

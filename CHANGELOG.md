@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.1
+
+- **Copy is back, without turning the screen into a text field.** Long-press a user
+  bubble or an assistant paragraph to open a copy panel: *Copy all* takes the whole
+  message in one tap, and the text inside the panel is selectable so a part can be
+  dragged out. Assistant answers also get a small copy button under the text. The
+  long-press gesture only sits on the text, so scrolling the list still works.
+- **Empty conversations are no longer saved.** Creating a chat keeps it in memory;
+  the JSON file is written with the first message *or* the first keystroke of a
+  draft. Drafts are debounced (500 ms) and saved per session, restored when you
+  come back; a session that only has a draft is labelled “draft” in the list
+  instead of looking like an empty shell. Leftovers from older versions are pruned
+  on startup.
+- **“Continue” now carries the whole context.** Agent requests start with the last
+  eight turns (assistant turns include a tool-call digest), consecutive same-role
+  turns are merged, and the plan/notes from `task_state` are persisted and replayed
+  via `resumeTaskState`. Before this, hitting the round limit and replying
+  “continue” made the model answer “this conversation is empty”.
+- **Per-call tool timing.** Each tool card shows the duration of that call
+  (seconds / minutes / hours) instead of “time since the run started”, which grew
+  into numbers like `1484111ms`.
+- **The agent can look at images.** New `phone_view_image(path)` reads a local
+  jpg/png/webp/gif (longest edge 1280, JPEG 82, 32 MB cap) and returns it as an
+  image block, so the model actually sees the picture instead of guessing from the
+  filename. It is registered even when Shizuku is not ready — reading a file needs
+  no special privilege — which makes it usable on Termux-only devices.
+- **Image preview is no longer full-screen.** Tapping an image in a chat opens it
+  centred at 90% × 72% with the conversation visible around it; tap anywhere or
+  press back to close.
+- VersionCode 37 / versionName 2.1.
+
 ## 2.0
 
 - **Native Jetpack Compose UI** replaces the WebView as the default surface:

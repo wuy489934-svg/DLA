@@ -47,19 +47,157 @@ class SessionStore(context: Context) {
 
     fun create(mode: String): String {
         val id = UUID.randomUUID().toString()
-        val now = System.currentTimeMillis()
-        val json = JSONObject()
-            .put("id", id)
-            .put("title", "新对话")
-            .put("createdAt", now)
-            .put("updatedAt", now)
-            .put("mode", mode)
-            .put("messages", JSONArray())
-        write(id, json)
+        ensure(id, mode)
         return id
     }
 
-    fun appendUser(sessionId: String, text: String, attachments: List<Attachment> = emptyList()) {
+    /**
+     * 空会话不落盘：只有在确实有内容（消息或草稿）时才建文件。
+     *
+     * ChatEngine 新建会话时只保留内存中的 Open，第一条消息 / 第一段草稿才会走到这里，
+     * 所以列表里不会再出现「新对话 0 条」。
+     */
+    fun ensure(sessionId: String, mode: String) {
+        val file = File(nativeDir, "$sessionId.json")
+        if (file.exists()) return
+        val now = System.currentTimeMillis()
+        write(
+            sessionId,
+            JSONObject()
+                .put("id", sessionId)
+                .put("title", "新对话")
+                .put("createdAt", now)
+                .put("updatedAt", now)
+                .put("mode", mode)
+                .put("messages", JSONArray()),
+        )
+    }
+
+    /** 保存输入框草稿；草稿被清空且没有消息时顺手删掉这个空会话 */
+    fun saveDraft(sessionId: String, mode: String, text: String) {
+        val file = File(nativeDir, "$sessionId.json")
+        if (!file.exists() && text.isBlank()) return
+        ensure(sessionId, mode)
+        val json = read(sessionId) ?: return
+        if (json.optString("draft") == text) return
+        val messageCount = json.optJSONArray("messages")?.length() ?: 0
+        if (text.isBlank() && messageCount == 0) {
+            file.delete()
+            return
+        }
+        json.put("draft", text)
+        json.put("updatedAt", System.currentTimeMillis())
+        write(sessionId, json)
+    }
+
+    /** 清理历史遗留的空会话（没有消息也没有草稿） */
+    fun pruneEmpty() {
+        val files = nativeDir.listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: return
+        for (file in files) {
+            val json = runCatching { JSONObject(file.readText()) }.getOrNull() ?: continue
+            val messageCount = json.optJSONArray("messages")?.length() ?: 0
+            if (messageCount == 0 && json.optString("draft").isBlank()) {
+                file.delete()
+            }
+        }
+    }
+
+    /** Agent 的计划/笔记，供「继续」时恢复 */
+    fun saveTaskState(sessionId: String, mode: String, state: TaskState?) {
+        if (state == null || state.isEmpty) return
+        ensure(sessionId, mode)
+        val json = read(sessionId) ?: return
+        json.put(
+            "taskState",
+            JSONObject()
+                .put("plan", JSONArray(state.plan))
+                .put("current", state.current)
+                .put("notes", JSONArray(state.notes)),
+        )
+        write(sessionId, json)
+    }
+
+    /**
+     * 给 Agent 的历史上下文。
+     *
+     * 之前每次运行只发一条「当前用户消息」，所以到步数上限后点「继续」，
+     * 模型看到的只有「继续」两个字，只能回答「当前会话是空的」。
+     * 这里把最近若干轮整理成 user / assistant 交替的 messages：
+     * 助手侧带一段工具调用摘要，让模型知道上一轮到底做了什么。
+     */
+    fun agentMessages(sessionId: String, maxTurns: Int = 8, dropLastUser: Boolean = false): JSONArray {
+        val detail = detail(sessionId) ?: return JSONArray()
+        // send() 会先把这一轮的用户消息落盘，再启动 Agent；
+        // 这一条要由调用方带着图片重新拼，所以这里把它摘掉，避免重复。
+        val messages = if (dropLastUser && detail.messages.lastOrNull()?.role == "user") {
+            detail.messages.dropLast(1)
+        } else {
+            detail.messages
+        }
+        val out = JSONArray()
+        var lastRole = ""
+        for (message in messages.takeLast(maxTurns)) {
+            val isUser = message.role == "user"
+            val content = if (isUser) userSummary(message) else assistantSummary(message)
+            if (content.isBlank()) continue
+            val role = if (isUser) "user" else "assistant"
+            // 连续同角色合并：Anthropic 协议要求 user/assistant 交替
+            if (role == lastRole) {
+                val previous = out.optJSONObject(out.length() - 1)
+                if (previous != null) {
+                    previous.put("content", previous.optString("content") + "\n\n" + content)
+                    continue
+                }
+            }
+            out.put(JSONObject().put("role", role).put("content", content))
+            lastRole = role
+        }
+        return out
+    }
+
+    private fun userSummary(message: ChatMessage): String = buildString {
+        append(message.text)
+        val documents = message.attachments.filter { it.kind == "text" && !it.text.isNullOrBlank() }
+        documents.forEach { attachment ->
+            append("\n\n【附件：").append(attachment.name ?: "文档").append("】\n")
+            append(attachment.text)
+        }
+        val files = message.attachments.filter { it.kind == "file" && !it.localPath.isNullOrBlank() }
+        if (files.isNotEmpty()) {
+            append("\n\n用户上传的文件（本机路径）：")
+            files.forEach { append("\n- ").append(it.localPath) }
+        }
+        if (message.attachments.any { it.kind == "image" }) {
+            append("\n（这条消息还带过图片，图片本身已不在历史里；需要再看请让用户重新发送）")
+        }
+    }.take(2500)
+
+    private fun assistantSummary(message: ChatMessage): String = buildString {
+        val text = message.blocks.filterIsInstance<Block.Text>().joinToString("\n\n") { it.text }
+        if (text.isNotBlank()) append(text)
+        val tools = message.blocks.filterIsInstance<Block.Tool>()
+        if (tools.isNotEmpty()) {
+            val grouped = tools.groupingBy { it.name }.eachCount()
+                .entries.joinToString("、") { "${it.key}×${it.value}" }
+            if (isNotEmpty()) append("\n\n")
+            append("（上一轮调用工具：").append(grouped)
+            val last = tools.lastOrNull { it.status == "done" && !it.result.isNullOrBlank() }
+            if (last != null) {
+                append("；最后一次 ").append(last.name).append(" 的结果摘要：")
+                append(last.result!!.replace("\n", " ").take(400))
+            }
+            append("）")
+        }
+        if (text.isBlank() && tools.isEmpty()) append("（无输出）")
+    }.take(2500)
+
+    fun appendUser(
+        sessionId: String,
+        text: String,
+        attachments: List<Attachment> = emptyList(),
+        mode: String = "llm",
+    ) {
+        ensure(sessionId, mode)
         val json = read(sessionId) ?: return
         val messages = json.optJSONArray("messages") ?: JSONArray().also { json.put("messages", it) }
         messages.put(
@@ -87,6 +225,8 @@ class SessionStore(context: Context) {
             val derived = text.replace("\n", " ").take(18)
             json.put("title", derived.ifBlank { if (attachments.isEmpty()) "新对话" else "图片" })
         }
+        // 消息已经发出去，输入框草稿作废
+        json.put("draft", "")
         json.put("updatedAt", System.currentTimeMillis())
         write(sessionId, json)
     }
@@ -97,7 +237,9 @@ class SessionStore(context: Context) {
         thinking: String,
         tools: List<Block.Tool>,
         status: String,
+        mode: String = "llm",
     ) {
+        ensure(sessionId, mode)
         val json = read(sessionId) ?: return
         val messages = json.optJSONArray("messages") ?: JSONArray().also { json.put("messages", it) }
         val blocks = JSONArray()

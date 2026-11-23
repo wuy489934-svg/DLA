@@ -2,16 +2,15 @@
 
 ## Current release
 
-DLA **1.4.1** is the latest published open-source release:
+DLA **2.1** is the latest published open-source release:
 
 - Repository: https://github.com/wuy489934-svg/DLA
-- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v1.4.1
-- Tag: `v1.4.1`
+- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v2.1
+- Tag: `v2.1` (`versionCode 37` / `versionName 2.1`)
 - APK + `SHA256SUMS` are attached to the Release.
+- User-facing notes: [`docs/release-notes-2.1.md`](docs/release-notes-2.1.md)；版本摘要见 `CHANGELOG.md`。
 
-**2.0 is prepared in this tree but not published yet**: `versionCode 35` /
-`versionName 2.0`, user-facing notes in [`docs/release-notes-2.0.md`](docs/release-notes-2.0.md),
-summary in `CHANGELOG.md`. Nothing is pushed or released as part of that preparation.
+Previous releases: `v2.0`（2.0）与 `v1.4.1`（1.4.1）。
 
 ## Build locally
 

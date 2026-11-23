@@ -199,6 +199,15 @@ object Lang {
         "改用系统文件夹选择器" to "Use system folder picker",
         "选中的文件里没有可用的内容" to "Nothing usable in the selected files",
 
+        // ---- 复制 / 图片预览 / 草稿 ----
+        "复制文本" to "Copy text",
+        "复制全部" to "Copy all",
+        "复制" to "Copy",
+        "长按文字可只选一段" to "Long-press the text to select part of it",
+        "草稿" to "Draft",
+        "图片预览" to "Image preview",
+        "点按关闭" to "Tap to close",
+
         // ---- 设置：对话 / 人设 ----
         "设置" to "Settings",
         "模型接口" to "Model API",

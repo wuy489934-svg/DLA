@@ -151,7 +151,15 @@ public final class AgentRunner {
     private static final Set<String> CORE_LOCAL = new HashSet<>(Arrays.asList(
             "phone_screen", "phone_tap_text", "phone_wait",
             "phone_tap", "phone_swipe", "phone_input", "phone_key",
-            "phone_screenshot", "phone_open", "phone_apps", "phone_device"
+            "phone_screenshot", "phone_view_image", "phone_open", "phone_apps", "phone_device"
+    ));
+    /**
+     * 不需要无障碍/Shizuku 就能用的本地工具：只用到文件系统与解码。
+     * 没有 Shizuku 时也必须注册，否则「看这张图」这类基础请求会没有工具可调。
+     */
+    private static final Set<String> NO_PRIVILEGE_LOCAL = new HashSet<>(Arrays.asList(
+            "phone_view_image", "phone_read", "phone_files", "phone_file_info",
+            "phone_device", "phone_docx_text", "phone_zip_list"
     ));
     private final Map<String, McpClient> clientByServer = new HashMap<>();
     /** 需要用户确认的 MCP 工具（按函数名） */
@@ -408,7 +416,8 @@ public final class AgentRunner {
             }
             JSONObject notice = new JSONObject();
             notice.put("type", "text");
-            notice.put("delta", "\n\n（已达到本轮 120 步上限。发送「继续」可以接着做；计划和笔记会保留。）");
+            notice.put("delta", "\n\n（已达到本轮 " + maxRounds
+                    + " 轮上限。发送「继续」可以接着做：上一轮的对话内容、计划与笔记会一起带过去。）");
             emit(notice);
             emitDone("max_tokens");
         } catch (CancelledException error) {
@@ -753,22 +762,27 @@ public final class AgentRunner {
                 && context.checkSelfPermission(TERMUX_RUN_COMMAND)
                 == PackageManager.PERMISSION_GRANTED;
         int coreCount = 0;
-        if (shizukuReady) {
-            JSONArray local = LocalTools.specs();
-            for (int i = 0; i < local.length(); i++) {
-                JSONObject spec = local.optJSONObject(i);
-                if (spec == null) {
-                    continue;
-                }
-                String name = spec.optString("name");
-                if (name.isEmpty()) {
-                    continue;
-                }
-                localCatalog.put(name, spec);
-                if (CORE_LOCAL.contains(name)) {
-                    tools.put(spec);
-                    coreCount++;
-                }
+        // 本地工具按可用性裁剪：
+        // - 需要无障碍/Shizuku 的只在 Shizuku 就绪时出现；
+        // - 纯文件类（读图/读文本）不依赖 Shizuku，Termux-only 的设备也要能用，
+        //   否则「看看这张图」在没装 Shizuku 的手机上会直接变成「没有可用工具」。
+        JSONArray local = LocalTools.specs();
+        for (int i = 0; i < local.length(); i++) {
+            JSONObject spec = local.optJSONObject(i);
+            if (spec == null) {
+                continue;
+            }
+            String name = spec.optString("name");
+            if (name.isEmpty()) {
+                continue;
+            }
+            if (!shizukuReady && !NO_PRIVILEGE_LOCAL.contains(name)) {
+                continue;
+            }
+            localCatalog.put(name, spec);
+            if (CORE_LOCAL.contains(name)) {
+                tools.put(spec);
+                coreCount++;
             }
         }
         if (termuxReady) {
@@ -816,9 +830,9 @@ public final class AgentRunner {
         return new JSONObject()
                 .put("name", "tool_search")
                 .put("description",
-                        "搜索 DLA 的扩展工具目录。初始只加载核心手机操作；"
+                        "搜索 DLA 的扩展工具目录。初始只加载核心手机操作（含截图与看图 phone_view_image）；"
                                 + "需要 shell、Termux 终端、文件、应用管理、设置、剪贴板、通知、zip、docx 等能力时先搜索"
-                                + "（shell 类关键词：shell/终端/命令/Termux/node/python）。"
+                                + "（shell 类关键词：shell/终端/命令/Termux/node/python；看图/图片关键词：图片/看图/image）。"
                                 + "返回匹配工具的说明和参数，下一轮这些工具会加入可用列表。"
                                 + "搜索不执行任何操作。")
                 .put("input_schema", new JSONObject()

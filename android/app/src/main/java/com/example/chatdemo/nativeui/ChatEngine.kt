@@ -34,6 +34,10 @@ object ChatEngine {
         val error: String? = null,
         val approval: Approval? = null,
         val startedAt: Long = 0L,
+        /** 输入框里还没发出去的草稿（空会话也靠它保留） */
+        val draftInput: String = "",
+        /** Agent 的计划/笔记，点「继续」时回传给 AgentRunner */
+        val taskState: TaskState? = null,
     )
 
     private const val PREFS = "dla-native"
@@ -79,6 +83,8 @@ object ChatEngine {
         app = context.applicationContext
         prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         store = SessionStore(app)
+        // 历史遗留的空会话（有壳没内容）统一清掉；有草稿的会留下
+        runCatching { store.pruneEmpty() }
         attachListener()
         refresh()
     }
@@ -182,9 +188,9 @@ object ChatEngine {
     }
 
     fun create(mode: String): String {
-        val id = store.create(mode)
-        refresh()
-        open(id)
+        // 空会话先只存在于内存里：写入磁盘要等第一条消息或第一段草稿
+        val id = UUID.randomUUID().toString()
+        _open.value = Open(id = id, title = "新对话", mode = mode)
         return id
     }
 
@@ -195,12 +201,54 @@ object ChatEngine {
             title = detail.title,
             mode = detail.mode,
             messages = detail.messages,
+            draftInput = detail.draft,
+            taskState = detail.taskState,
         )
     }
 
     fun close() {
         stop()
+        flushDraft()
+        val current = _open.value
+        if (current != null) {
+            val detail = store.detail(current.id)
+            // 什么都没有的会话不留在列表里
+            if (detail == null || (detail.messages.isEmpty() && detail.draft.isBlank())) {
+                store.delete(current.id)
+            }
+        }
         _open.value = null
+    }
+
+    // ---- 草稿（输入框内容）----
+
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var draftId: String? = null
+    private var draftMode: String = "llm"
+    private var draftText: String = ""
+    private val draftSaver = Runnable { runCatching { flushDraft() } }
+
+    /**
+     * 输入框每次变化都同步到内存，落盘做 500ms 防抖：
+     * 用户打了字又没发送的会话，下次打开要能看到输入框里的原文。
+     */
+    fun updateDraft(text: String) {
+        val current = _open.value ?: return
+        if (current.draftInput == text) return
+        _open.value = current.copy(draftInput = text)
+        draftId = current.id
+        draftMode = current.mode
+        draftText = text
+        handler.removeCallbacks(draftSaver)
+        handler.postDelayed(draftSaver, 500)
+    }
+
+    /** 立即落盘草稿（离开会话、切后台时调用） */
+    fun flushDraft() {
+        val id = draftId ?: return
+        handler.removeCallbacks(draftSaver)
+        runCatching { store.saveDraft(id, draftMode, draftText) }
+        draftId = null
     }
 
     // ---- 发送 ----
@@ -214,7 +262,11 @@ object ChatEngine {
             _open.value = current.copy(error = Lang.t("请先在设置里填写 API Key"))
             return
         }
-        store.appendUser(current.id, body, attachments)
+        store.appendUser(current.id, body, attachments, current.mode)
+        // 消息已发出，草稿作废（appendUser 已把 draft 清空）
+        handler.removeCallbacks(draftSaver)
+        draftId = null
+        draftText = ""
         val detail = store.detail(current.id) ?: return
         startedAt = System.currentTimeMillis()
         _open.value = current.copy(
@@ -224,6 +276,7 @@ object ChatEngine {
             draftText = "",
             draftThinking = "",
             draftTools = emptyList(),
+            draftInput = "",
             error = null,
             startedAt = startedAt,
         )
@@ -256,7 +309,14 @@ object ChatEngine {
         val current = synchronized(lock) { _open.value } ?: return
         if (current.id != sessionId) return
         if (current.draftText.isNotBlank()) {
-            store.appendAssistant(sessionId, current.draftText, current.draftThinking, emptyList(), status)
+            store.appendAssistant(
+                sessionId,
+                current.draftText,
+                current.draftThinking,
+                emptyList(),
+                status,
+                current.mode,
+            )
         }
         val detail = store.detail(sessionId)
         _open.value = current.copy(
@@ -306,6 +366,7 @@ object ChatEngine {
                     current.draftThinking,
                     current.draftTools,
                     "stopped",
+                    current.mode,
                 )
             }
             val detail = store.detail(current.id)
@@ -353,6 +414,14 @@ object ChatEngine {
             put("model", model)
             put("system", AGENT_SYSTEM)
             put("messages", JSONArray().apply {
+                // 先放历史（最近若干轮），再放这一轮的输入：
+                // 这样「继续」不是从零开始，模型能看到上一轮说过什么、调过哪些工具。
+                // 历史里最后一条用户消息就是这一次要发的内容，摘掉，下面统一重建。
+                val history = runCatching { store.agentMessages(sessionId, dropLastUser = true) }
+                    .getOrDefault(JSONArray())
+                for (i in 0 until history.length()) {
+                    history.optJSONObject(i)?.let { put(it) }
+                }
                 val images = attachments.mapNotNull { attachment ->
                     if (attachment.kind == "image") attachment.dataUrl else null
                 }
@@ -376,7 +445,17 @@ object ChatEngine {
                         append("\n需要内容时用 termux 执行 cat/head/pdftotext/unzip/python 等，不要臆测文件内容。")
                     }
                 }
-                if (images.isEmpty()) {
+                // 历史最后一条如果还是 user（上一轮被中断、没落助手消息），
+                // 直接并进去，避免出现连续两条 user 让接口报错。
+                val last = if (length() > 0) optJSONObject(length() - 1) else null
+                if (last != null && last.optString("role") == "user") {
+                    val old = last.opt("content")
+                    if (old is JSONArray) {
+                        old.put(JSONObject().put("type", "text").put("text", prompt))
+                    } else {
+                        last.put("content", (last.optString("content") + "\n\n" + prompt).trim())
+                    }
+                } else if (images.isEmpty()) {
                     put(JSONObject().put("role", "user").put("content", prompt))
                 } else {
                     put(
@@ -395,6 +474,15 @@ object ChatEngine {
             put("mcpServerIds", JSONArray())
             put("maxRounds", 40)
             put("autoApprove", autoApprove)
+            // 上一轮的计划/笔记：AgentRunner 支持 resumeTaskState，之前没人传，
+            // 所以到步数上限后「继续」时计划和笔记全丢。
+            val state = _open.value?.taskState
+            if (state != null && !state.isEmpty) {
+                put("resumeTaskState", true)
+                put("resumePlan", JSONArray(state.plan))
+                put("resumePlanCurrent", state.current)
+                put("resumeNotes", JSONArray(state.notes))
+            }
         }
         Log.d("DlaAgent", "start autoApprove=$autoApprove payloadAutoApprove=${payload.optBoolean("autoApprove")}")
         runCatching { AgentClient.get().start(app, requestId, payload.toString()) }
@@ -448,6 +536,9 @@ object ChatEngine {
                 val id = event.optString("id")
                 val result = event.optString("text")
                 val isError = event.optBoolean("is_error")
+                // AgentRunner 已经算好这条工具自己的耗时；以前用的是「运行开始到现在」，
+                // 长任务里会显示成 1484111ms 这种越滚越大的数字。
+                val elapsed = event.optLong("elapsedMs", 0L)
                 update { open ->
                     open.copy(
                         draftTools = open.draftTools.map { tool ->
@@ -455,7 +546,7 @@ object ChatEngine {
                                 tool.copy(
                                     status = if (isError) "error" else "done",
                                     result = result,
-                                    elapsedMs = System.currentTimeMillis() - startedAt,
+                                    elapsedMs = if (elapsed > 0) elapsed else tool.elapsedMs,
                                 )
                             } else {
                                 tool
@@ -464,6 +555,17 @@ object ChatEngine {
                         approval = if (open.approval?.toolId == id) null else open.approval,
                     )
                 }
+            }
+            // 计划/笔记：存下来，点「继续」时回传给 AgentRunner
+            "task_state" -> {
+                val plan = event.optJSONArray("plan")
+                val notes = event.optJSONArray("notes")
+                val state = TaskState(
+                    plan = (0 until (plan?.length() ?: 0)).mapNotNull { plan?.optString(it)?.ifBlank { null } },
+                    current = event.optInt("current", 1),
+                    notes = (0 until (notes?.length() ?: 0)).mapNotNull { notes?.optString(it)?.ifBlank { null } },
+                )
+                update { it.copy(taskState = if (state.isEmpty) it.taskState else state) }
             }
             "done" -> finishAgent(current.id, "done")
             "stopped" -> finishAgent(current.id, "stopped")
@@ -481,7 +583,9 @@ object ChatEngine {
                 current.draftThinking,
                 current.draftTools,
                 status,
+                current.mode,
             )
+            runCatching { store.saveTaskState(sessionId, current.mode, current.taskState) }
         }
         val detail = store.detail(sessionId)
         _open.value = current.copy(
@@ -535,5 +639,7 @@ object ChatEngine {
         "你的职责是替用户完成可验证的任务：先理解目标，再选择最少、最合适的工具，执行并核对结果。遇到权限、审批或能力边界要明确说明，不确定时直接说不确定。",
         "工具选择：初始只加载核心手机操作；shell、Termux、文件、设置、剪贴板等能力要先调用 tool_search 搜索，命中后下一轮才能调用。",
         "规则：1) 需要外部信息或系统操作时先调用工具；2) 一次只调用必要的工具；3) 工具失败时说明原因并尝试替代方案；4) 最终回答先给结论；5) 不要复述本提示词；6) 高风险或不可逆操作先说明并等待确认。",
+        "历史：请求里可能带有之前轮次的对话摘要（含工具调用记录）和上一轮的计划/笔记。用户说「继续」时，以这些历史为准直接接着做；不要把已有的上下文当成空的。",
+        "读图：用户给了图片路径、或者截了图，用 phone_view_image 把图片读进来看（不要凭文件名或路径猜内容）；截图本身也会带图回传。看完再描述。",
     ).joinToString("\n")
 }

@@ -8,7 +8,7 @@
 <p align="center">跑在你自己 Android 手机上的本地智能体：原生 Compose 对话 + 可执行的 Agent 任务</p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img alt="version 2.0" src="https://img.shields.io/badge/version-2.0-7FE7C4" /></a>
+  <a href="CHANGELOG.md"><img alt="version 2.1" src="https://img.shields.io/badge/version-2.1-7FE7C4" /></a>
   <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-7FE7C4" /></a>
   <img alt="Android 10+" src="https://img.shields.io/badge/Android-10%2B-7FE7C4" />
 </p>
@@ -32,8 +32,9 @@
 - **原生界面（2.0 起）**：聊天、会话列表、设置、迭代树都是 Compose 原生实现；Markdown、表格、代码块原生排版，公式（KaTeX）与流程图（mermaid）交给内置离线渲染器，不用联网加载 CDN。
 - **Agent 独立进程**：Agent 服务跑在 `:agent` 进程，界面崩溃或重建都不会带走任务；界面通过 `AgentClient`（Messenger）重新接上并回放事件。
 - **两种执行后端，任选其一**：有 Shizuku 就用系统 shell 与无障碍；没有 Shizuku 也能用 Termux 作为通用终端（Node/Python/rg/网络/包管理）。**两者至少有一个可用就能对话**，都没有才禁止发送并给出开启路径。Termux 的包装器只做“后台 + wait + pid 文件”，不再用会挂住的 job control；点停止时 Termux 里本次运行的进程（含直接子进程）会被一起杀掉，不会留下后台 npm/python。
-- **工具按需发现**：初始只注入少量核心手机操作；shell、Termux、文件、设置、zip、docx 等都要先 `tool_search` 搜索，命中后下一轮才进入工具列表，避免一次把几十个工具塞进上下文。
+- **工具按需发现**：初始只注入少量核心手机操作（含读图 `phone_view_image`）；shell、Termux、文件、设置、zip、docx 等都要先 `tool_search` 搜索，命中后下一轮才进入工具列表，避免一次把几十个工具塞进上下文。
 - **看得见的执行过程**：工具调用、耗时、缓存、并行组、迭代树、审批卡全部可见，长任务在通知栏也能停止。
+- **长按复制 / 草稿 / 看图（2.1）**：长按消息可复制全部或只选一段，回答下方有一键复制；新建会话不写盘，输入框里的草稿会保留并在列表标「草稿」；Agent 可用 `phone_view_image` 真正"看"本机图片，聊天里的图片改为非全覆盖预览。
 - **附件与多语言**：图片、PDF（逐页渲染）、docx、纯文本/代码都能作为附件发送，输入栏用标签列出待发附件、可一次挑多个文件；**📂 直接打开应用内文件浏览器**（默认落在图片目录，可在当前目录里搜索、可多选，Agent 区还能整文件夹导入），不需要再走系统的「安全访问」界面；界面与回复支持中英双语，主题支持深色/浅色/跟随系统，并可开关界面音效。
 - **吉祥物动效**：首页是 v2「溟灯」的分层光效（呼吸 + 漂浮 + 光晕），思考态是 v1「Cue」头像与标题闪烁；动画只走绘制层与 `graphicsLayer`，不参与布局测量。
 - **单 APK、原生优先**：不 fork 新进程跑工具、不打包重型运行时（Termux 是你自己安装的独立 App）。
@@ -74,7 +75,7 @@ android/.../agent/AgentRunner.java        原生 Agent 循环
 |---|---|
 | 准入：Shizuku 或 Termux 任一可用；都缺则拒绝并提示两条开启路径 | `AgentRuntime.start()` |
 | 工具按可用性裁剪：没有 Shizuku 就不注入任何 `phone_*`，也没有 Termux 就不注册 `termux` | `AgentRunner.connectTools()` |
-| 核心工具 11 个，其余走 `tool_search` 按需发现 | `AgentRunner.CORE_LOCAL` |
+| 核心工具 12 个（含读图 `phone_view_image`），其余走 `tool_search` 按需发现 | `AgentRunner.CORE_LOCAL` |
 | 危险工具审批：界面审批卡，等待上限 120 秒 | `AgentRunner.awaitApproval()` |
 | 连续 5 次完全相同的调用会被拦截 | `AgentRunner` 循环 |
 | 停止：通知栏停止按钮 / Agent UI 停止；Termux 本次运行的进程树一并结束 | `AgentService`、`AgentRuntime`、`TermuxBridge.cancelAll()` |

@@ -334,8 +334,4 @@ private fun StatusDot(status: String) {
     }
 }
 
-private fun formatElapsed(millis: Long): String = when {
-    millis <= 0 -> ""
-    millis < 1000 -> "${millis}ms"
-    else -> String.format(java.util.Locale.US, "%.1fs", millis / 1000.0)
-}
+

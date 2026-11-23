@@ -88,6 +88,7 @@ public final class LocalTools {
             case "phone_clipboard_get":
             case "phone_files":
             case "phone_read":
+            case "phone_view_image":
             case "phone_file_info":
             case "phone_json_get":
             case "phone_zip_list":
@@ -287,6 +288,13 @@ public final class LocalTools {
                 "phone_screenshot",
                 "用无障碍原生截图并保存到相册 Pictures/DLA，返回路径；同时回传压缩图。",
                 schema(props())
+        ));
+        list.put(tool(
+                "phone_view_image",
+                "打开一张本机图片给你自己看（jpg/png/webp/gif，长边压到 1280 再回传）。"
+                        + "用户提到的图片、相册文件、termux 用 screencap 存的截图都可以用它读；"
+                        + "看完图再回答，不要凭文件名猜内容。",
+                schema(props("path", p("string", "图片绝对路径，例如 /sdcard/DCIM/Camera/a.jpg")), "path")
         ));
         list.put(tool(
                 "phone_device",
@@ -661,6 +669,13 @@ public final class LocalTools {
                                 ? error.getClass().getSimpleName() : error.getMessage()));
                     }
                 }
+                case "phone_view_image": {
+                    String path = arguments.optString("path").trim();
+                    if (path.isEmpty()) {
+                        return fail("path 不能为空");
+                    }
+                    return viewImage(path);
+                }
                 case "phone_device": {
                     java.util.Locale locale = java.util.Locale.US;
                     android.util.DisplayMetrics metrics = context.getResources().getDisplayMetrics();
@@ -852,6 +867,82 @@ public final class LocalTools {
                 imageBase64,
                 "image/jpeg"
         );
+    }
+
+    /**
+     * 读本机图片给模型看（agent 的「读图」能力）。
+     *
+     * 参考 DSH 的 read_image：先按扩展名/魔数确认是图片，再压到长边 1280 的 JPEG，
+     * 返回一段文字信封 + 图片块（AgentRunner 会把 imageBase64 转成 image block）。
+     * 压缩是为了控制请求体积：原图动辄几 MB，一张就吃掉大量 token。
+     */
+    private static Result viewImage(String path) {
+        File file = new File(path);
+        if (!file.isFile()) {
+            return fail("文件不存在或不是文件：" + path);
+        }
+        long size = file.length();
+        if (size <= 0) {
+            return fail("文件是空的：" + path);
+        }
+        if (size > 32L * 1024 * 1024) {
+            return fail("图片太大（" + (size / 1024 / 1024) + "MB）。先用 termux 压到 32MB 以内再读。");
+        }
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            try (InputStream probe = new FileInputStream(file)) {
+                BitmapFactory.decodeStream(probe, null, bounds);
+            }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                return fail("这不是能解码的图片（支持 jpg/png/webp/gif）：" + path);
+            }
+            int sample = 1;
+            while (bounds.outWidth / sample > 2560 || bounds.outHeight / sample > 2560) {
+                sample *= 2;
+            }
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = sample;
+            Bitmap decoded;
+            try (InputStream input = new FileInputStream(file)) {
+                decoded = BitmapFactory.decodeStream(input, null, options);
+            }
+            if (decoded == null) {
+                return fail("图片解码失败：" + path);
+            }
+            int originalWidth = decoded.getWidth();
+            int originalHeight = decoded.getHeight();
+            int longest = Math.max(originalWidth, originalHeight);
+            Bitmap scaled = decoded;
+            if (longest > 1280) {
+                float ratio = 1280f / longest;
+                scaled = Bitmap.createScaledBitmap(
+                        decoded,
+                        Math.max(1, Math.round(originalWidth * ratio)),
+                        Math.max(1, Math.round(originalHeight * ratio)),
+                        true
+                );
+            }
+            ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+            scaled.compress(Bitmap.CompressFormat.JPEG, 82, jpeg);
+            int width = scaled.getWidth();
+            int height = scaled.getHeight();
+            if (scaled != decoded) {
+                scaled.recycle();
+            }
+            decoded.recycle();
+            byte[] bytes = jpeg.toByteArray();
+            if (bytes.length == 0) {
+                return fail("图片压缩后为空：" + path);
+            }
+            String envelope = "<path>" + path + "</path>\n<type>image</type>\n<content>\n"
+                    + "image/jpeg " + width + "x" + height + " px, " + bytes.length + " bytes"
+                    + "（原图 " + originalWidth + "x" + originalHeight + "）\n</content>";
+            return new Result(envelope, false, Base64.getEncoder().encodeToString(bytes), "image/jpeg");
+        } catch (Throwable error) {
+            return fail("读取图片失败：" + (error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage()));
+        }
     }
 
     private static String zipList(String path) throws Exception {

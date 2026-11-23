@@ -38,11 +38,14 @@
 
 初始工具集不是“越多越好”，只有三类会直接进上下文：
 
-1. **核心手机操作（11 个）**：`phone_screen`、`phone_tap_text`、`phone_wait`、`phone_tap`、`phone_swipe`、
-   `phone_input`、`phone_key`、`phone_screenshot`、`phone_open`、`phone_apps`、`phone_device`
+1. **核心手机操作（12 个）**：`phone_screen`、`phone_tap_text`、`phone_wait`、`phone_tap`、`phone_swipe`、
+   `phone_input`、`phone_key`、`phone_screenshot`、`phone_view_image`、`phone_open`、`phone_apps`、`phone_device`
    （见 `AgentRunner.CORE_LOCAL`）。
 2. **`tool_search`**：搜索扩展目录，返回说明与参数；命中后下一轮才把该工具加入 `tools`。
 3. **MCP 工具**：按已连接 Server 注入，名称做 `server_tool` 前缀去重。
+
+`phone_view_image` 是 2.1 新增的**读图**工具：给一个图片路径，按长边 1280、JPEG 82 压缩后
+以 image block 回传，模型下一轮就能“看到”这张图；超过 32MB 或不可解码直接报错，不会静默失败。
 
 按需发现的工具包括：`phone_shell`、文件读写/替换、JSON、zip、docx、设置、剪贴板、通知、
 `termux`（单一终端工具，action=status/capabilities/run）。
@@ -51,9 +54,12 @@
 
 | 条件 | 结果 |
 |---|---|
-| Shizuku 未就绪 | 不注入任何 `phone_*`，也不把它们放进可搜索目录（搜不到就不会误调用） |
+| Shizuku 未就绪 | 只注册**不依赖特权**的纯文件类工具（`NO_PRIVILEGE_LOCAL`：读图、读文本、列目录、文件信息、设备信息、docx、zip 列表），其余 `phone_*` 不注入、也不进可搜索目录 |
 | Termux 未安装或无 `RUN_COMMAND` 权限 | 不注册 `termux` |
 | 两者都不可用 | 开局 `status` 说明，且 `AgentRuntime.start()` 已经拒绝本次运行 |
+
+> 2.1 之前的版本在 Shizuku 未就绪时连“读图/读文件”都不注册，导致纯 Termux 设备上
+> “看看这张图”只能说“没有可用工具”。现在这类纯文件工具始终可用。
 
 ## 4. 三种执行后端
 
@@ -69,7 +75,7 @@ Termux 的边界：执行身份是 DLA 自己的 uid，只能访问 Termux 可�
 
 | 数据 | 位置 | 说明 |
 |---|---|---|
-| 会话与消息（原生界面） | `files/native-sessions/<id>.json`（`SessionStore.kt`） | 原生界面的权威存储；首次启动只补缺失地导入 `host-sessions` |
+| 会话与消息（原生界面） | `files/native-sessions/<id>.json`（`SessionStore.kt`） | 原生界面的权威存储；首次启动只补缺失地导入 `host-sessions`。2.1 起同一文件还存 `draft`（输入框草稿）与 `taskState`（计划/笔记） |
 | 会话与消息（网页界面） | WebView IndexedDB | 网页界面的权威存储 |
 | 会话镜像 | `files/host-sessions/*.json` | IndexedDB 为空时用于恢复；只含文本与元数据 |
 | 诊断 | `files/diagnostics/events.log` | 环形日志（256KB），只记事件名与异常栈，不记消息正文 |

@@ -2,6 +2,8 @@ package com.example.chatdemo.nativeui
 
 import android.util.Log
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -30,7 +32,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -62,6 +68,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -71,6 +78,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -78,6 +86,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,7 +102,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -103,6 +115,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -459,7 +473,13 @@ private fun SessionRow(card: SessionCard, onOpen: () -> Unit, onDelete: () -> Un
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 buildString {
-                    append(Lang.t("%d 条", card.messageCount))
+                    append(
+                        if (card.messageCount == 0 && card.hasDraft) {
+                            Lang.t("草稿")
+                        } else {
+                            Lang.t("%d 条", card.messageCount)
+                        },
+                    )
                     if (card.steps > 0) {
                         append(" · ")
                         append(Lang.t("%d 轮", card.rounds))
@@ -535,11 +555,15 @@ private fun buildRows(messages: List<ChatMessage>): List<ChatRow> {
 private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
     val open by ChatEngine.open.collectAsState()
     val current = open
-    var input by remember(current?.id) { mutableStateOf("") }
+    // 打开会话时恢复输入框草稿：空会话靠它保留全貌
+    var input by remember(current?.id) { mutableStateOf(current?.draftInput.orEmpty()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var pendingAttachments by remember(current?.id) { mutableStateOf<List<Attachment>>(emptyList()) }
+    // 长按文本弹出的复制面板 / 点图后的非全覆盖预览
+    var copyTarget by remember(current?.id) { mutableStateOf<String?>(null) }
+    var previewTarget by remember(current?.id) { mutableStateOf<String?>(null) }
 
     // 图片：走系统照片选择器，单点直接进相册，不出现 SAF 的「安全访问」界面
     val imagePicker = rememberLauncherForActivityResult(
@@ -688,7 +712,11 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                     }
                     items(reversed, key = { it.key }) { row ->
                         when (row) {
-                            is ChatRow.User -> UserMessageRow(row.message)
+                            is ChatRow.User -> UserMessageRow(
+                                row.message,
+                                onCopy = { copyTarget = it },
+                                onPreview = { previewTarget = it },
+                            )
                             is ChatRow.Tree -> IterationTree(
                                 rounds = row.rounds,
                                 modifier = Modifier.fillMaxWidth(),
@@ -703,7 +731,10 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                                     }
                                 },
                             )
-                            is ChatRow.BlockRow -> BlockRowView(row.block)
+                            is ChatRow.BlockRow -> BlockRowView(
+                                row.block,
+                                onCopy = { copyTarget = it },
+                            )
                         }
                     }
                 }
@@ -723,7 +754,10 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 enabled = current != null,
                 streaming = current?.streaming == true,
                 attachments = pendingAttachments,
-                onChange = { input = it },
+                onChange = {
+                    input = it
+                    ChatEngine.updateDraft(it)
+                },
                 onSend = {
                     val text = input.trim()
                     if (text.isNotEmpty() || pendingAttachments.isNotEmpty()) {
@@ -733,6 +767,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                     }
                 },
                 onStop = { ChatEngine.stop() },
+                onPreview = { previewTarget = it },
                 onPickImage = {
                     runCatching {
                         imagePicker.launch(
@@ -775,15 +810,181 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
             },
         )
     }
+
+    // 长按文本 → 复制面板；点图 → 非全覆盖预览
+    copyTarget?.let { text ->
+        CopyTextPanel(text = text, onDismiss = { copyTarget = null })
+    }
+    previewTarget?.let { dataUrl ->
+        ImagePreviewOverlay(dataUrl = dataUrl, onDismiss = { previewTarget = null })
+    }
+}
+
+/** 长按手势：不消费拖动，所以不会抢走列表的上下滑动 */
+private fun Modifier.onLongPressText(action: () -> Unit): Modifier = this.pointerInput(action) {
+    detectTapGestures(onLongPress = { action() })
+}
+
+/**
+ * 复制面板：长按消息出现，而不是让整块屏幕进入选择态。
+ *
+ * - 「复制全部」一键复制整条内容；
+ * - 「选择文本」在这里才把内容放进 SelectionContainer，可以只拖选一段；
+ * - 点空白处/返回键退出，不影响聊天列表的滚动。
+ */
+@Composable
+private fun CopyTextPanel(text: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    BackHandler(onBack = onDismiss)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            color = DlaColors.Surface,
+            shape = RoundedCornerShape(20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp)
+                .heightIn(max = 560.dp),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text(
+                    Lang.t("复制文本"),
+                    color = DlaColors.Text,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(10.dp))
+                val scroll = rememberScrollState()
+                SelectionContainer {
+                    Text(
+                        text = text,
+                        color = DlaColors.Text,
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(scroll),
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        Lang.t("长按文字可只选一段"),
+                        color = DlaColors.TextDim,
+                        fontSize = 10.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismiss) {
+                        Text(Lang.t("取消"), color = DlaColors.TextDim, fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(DlaColors.Mint)
+                            .clickable {
+                                copyToClipboard(context, text)
+                                Toast.makeText(context, Lang.t("已复制"), Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                            .padding(horizontal = 18.dp, vertical = 9.dp),
+                    ) {
+                        Text(Lang.t("复制全部"), color = DlaColors.OnAccent, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 一键复制：正文下方的小按钮 */
+@Composable
+private fun CopyChip(text: String) {
+    if (text.isBlank()) return
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable {
+                copyToClipboard(context, text)
+                Toast.makeText(context, Lang.t("已复制"), Toast.LENGTH_SHORT).show()
+            }
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("⧉", color = DlaColors.TextDim, fontSize = 11.sp)
+        Spacer(Modifier.width(4.dp))
+        Text(Lang.t("复制"), color = DlaColors.TextDim, fontSize = 10.sp)
+    }
+}
+
+private fun copyToClipboard(context: Context, text: String) {
+    runCatching {
+        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        manager.setPrimaryClip(ClipData.newPlainText("DLA", text))
+    }
+}
+
+/**
+ * 图片预览：只占屏幕中央一块（宽 90%、高 72%），四周仍能看到聊天背景，
+ * 点任意位置或按返回关闭。不是全屏看图器，避免「一点图就被铺满全屏」。
+ */
+@Composable
+private fun ImagePreviewOverlay(dataUrl: String, onDismiss: () -> Unit) {
+    BackHandler(onBack = onDismiss)
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, dataUrl) {
+        value = withContext(Dispatchers.IO) { Attachments.decode(dataUrl) }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.72f))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        contentAlignment = Alignment.Center,
+    ) {
+        val image = bitmap
+        if (image == null) {
+            CircularProgressIndicator(color = DlaColors.Mint, strokeWidth = 2.dp, modifier = Modifier.size(26.dp))
+        } else {
+            Image(
+                bitmap = image.asImageBitmap(),
+                contentDescription = Lang.t("图片预览"),
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .fillMaxHeight(0.72f)
+                    .clip(RoundedCornerShape(14.dp)),
+            )
+        }
+        Text(
+            Lang.t("点按关闭"),
+            color = Color.White.copy(alpha = 0.65f),
+            fontSize = 11.sp,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 30.dp),
+        )
+    }
 }
 
 @Composable
-private fun UserMessageRow(message: ChatMessage) {
+private fun UserMessageRow(
+    message: ChatMessage,
+    onCopy: (String) -> Unit,
+    onPreview: (String) -> Unit,
+) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Column(horizontalAlignment = Alignment.End) {
             message.attachments.forEach { attachment ->
                 if (attachment.kind == Documents.KIND_IMAGE && attachment.dataUrl != null) {
-                    AttachmentThumb(attachment.dataUrl, 168.dp)
+                    AttachmentThumb(
+                        dataUrl = attachment.dataUrl,
+                        size = 168.dp,
+                        onClick = { onPreview(attachment.dataUrl) },
+                    )
                 } else {
                     Text(
                         attachment.name ?: Lang.t("文档"),
@@ -805,6 +1006,7 @@ private fun UserMessageRow(message: ChatMessage) {
                     modifier = Modifier
                         .width(285.dp)
                         .background(DlaColors.Mint.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
+                        .onLongPressText { onCopy(message.text) }
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 )
             }
@@ -813,7 +1015,7 @@ private fun UserMessageRow(message: ChatMessage) {
 }
 
 @Composable
-private fun BlockRowView(block: Block) {
+private fun BlockRowView(block: Block, onCopy: (String) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -827,10 +1029,19 @@ private fun BlockRowView(block: Block) {
                 // 回收/复用条目时不会重建 WebView，避免正文忽隐忽现和高度跳变。
                 // 含公式（$...$ / $$...$$）或 ```mermaid 的文本仍交给 WebView，
                 // 保留 KaTeX 排版与流程图渲染能力。
-                if (needsRichRenderer(block.text)) {
-                    MarkdownText(block.text)
-                } else {
-                    NativeMarkdown(block.text)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onLongPressText { onCopy(block.text) },
+                ) {
+                    if (needsRichRenderer(block.text)) {
+                        MarkdownText(block.text)
+                    } else {
+                        NativeMarkdown(block.text)
+                    }
+                    if (block.text.isNotBlank()) {
+                        CopyChip(block.text)
+                    }
                 }
             }
             is Block.Other -> Unit
@@ -974,7 +1185,7 @@ private fun ToolCard(block: Block.Tool) {
                 modifier = Modifier.weight(1f),
             )
             if (block.elapsedMs > 0) {
-                Text("${block.elapsedMs}ms", color = DlaColors.TextDim, fontSize = 10.sp)
+                Text(formatElapsed(block.elapsedMs), color = DlaColors.TextDim, fontSize = 10.sp)
                 Spacer(Modifier.width(8.dp))
             }
             Text(if (expanded) Lang.t("收起") else Lang.t("详情"), color = DlaColors.Mint, fontSize = 10.sp)
@@ -1208,6 +1419,7 @@ private fun Composer(
     onChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onPreview: (String) -> Unit,
     onPickImage: () -> Unit,
     onPickFiles: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
@@ -1230,7 +1442,11 @@ private fun Composer(
                 attachments.forEachIndexed { index, attachment ->
                     Box {
                         if (attachment.kind == Documents.KIND_IMAGE && attachment.dataUrl != null) {
-                            AttachmentThumb(attachment.dataUrl, 64.dp)
+                            AttachmentThumb(
+                                dataUrl = attachment.dataUrl,
+                                size = 64.dp,
+                                onClick = { onPreview(attachment.dataUrl) },
+                            )
                         } else {
                             Box(
                                 modifier = Modifier

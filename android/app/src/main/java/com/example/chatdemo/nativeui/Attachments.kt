@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -93,7 +94,7 @@ object Attachments {
 }
 
 @Composable
-fun AttachmentThumb(dataUrl: String, size: Dp = 72.dp) {
+fun AttachmentThumb(dataUrl: String, size: Dp = 72.dp, onClick: (() -> Unit)? = null) {
     val bitmap by produceState<Bitmap?>(initialValue = null, dataUrl) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             Attachments.decode(dataUrl)
@@ -104,7 +105,8 @@ fun AttachmentThumb(dataUrl: String, size: Dp = 72.dp) {
         modifier = Modifier
             .size(size)
             .clip(RoundedCornerShape(10.dp))
-            .background(DlaColors.SurfaceHigh),
+            .background(DlaColors.SurfaceHigh)
+            .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)),
         contentAlignment = Alignment.Center,
     ) {
         if (image != null) {
