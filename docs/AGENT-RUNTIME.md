@@ -103,6 +103,7 @@ android/app/src/main/java/com/example/chatdemo/
   MainActivity.java                       WebView 宿主与 HostBridge（@JavascriptInterface）
   nativeui/ChatEngine.kt                  原生界面的请求组装、事件消费与会话状态
   nativeui/NativeShellActivity.kt         原生 Compose 界面（会话 / 聊天 / 设置）
+  nativeui/MascotView.kt                  吉祥物动效：v1 Cue 思考头像、v2 溟灯首页光效
   nativeui/MarkdownCompose.kt             普通 Markdown 的原生 Compose 渲染
   nativeui/Markdown.kt                    隔离 WebView：仅加载 assets/renderer 里的 KaTeX / mermaid
   nativeui/SessionStore.kt                files/native-sessions 的会话落盘
@@ -125,3 +126,4 @@ android/app/src/main/java/com/example/chatdemo/
 
 android/app/src/main/assets/renderer/     KaTeX 0.16.11 + mermaid 10.9.1（离线、只读）
 ```
+android/app/src/main/res/drawable-nodpi/  mascot_cue.png / mascot_moon.png（吉祥物立绘，1024 透明）

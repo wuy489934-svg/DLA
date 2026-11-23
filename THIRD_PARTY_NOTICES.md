@@ -31,7 +31,7 @@ report) and attach it to the release.
 ## Assets
 
 The repository intentionally contains **no** third-party character artwork.
-The launcher icon and the mascot proposals are original DLA artwork (see
-`NOTICE`); the preview images in `docs/assets/` and `docs/mascot/` are generated
-from the same source. User-supplied persona text and portraits are optional,
-stored locally, and are not distributed with the app.
+The launcher icon and the in-app mascot art (v1 Cue avatar, v2 Ming beacon) are
+original DLA artwork (see `NOTICE`); the preview images in `docs/assets/` and
+`docs/mascot/` are generated from the same source. User-supplied persona text
+and portraits are optional, stored locally, and are not distributed with the app.

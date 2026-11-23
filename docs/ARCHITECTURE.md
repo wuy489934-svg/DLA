@@ -5,8 +5,9 @@
 ```text
 native UI (Kotlin, Jetpack Compose)            web UI (React + Zustand + IndexedDB)
   ├─ NativeShellActivity / ChatEngine.kt         ├─ chat store / API client
-  ├─ MarkdownCompose.kt (native rendering)       ├─ agent bridge ── AndroidHost ──┐
-  └─ Markdown.kt (isolated KaTeX/mermaid WV)     └─ WebView UI                     │
+  ├─ MascotView.kt (v1 Cue / v2 Ming motion)     ├─ agent bridge ── AndroidHost ──┐
+  ├─ MarkdownCompose.kt (native rendering)       └─ WebView UI                     │
+  └─ Markdown.kt (isolated KaTeX/mermaid WV)                                       │
                     │                                                             │
                     ▼                                                             ▼
 android/ (Java + Kotlin, applicationId io.github.dla.agent)

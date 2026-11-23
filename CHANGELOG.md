@@ -21,17 +21,26 @@
 - **Bilingual UI** (Chinese / English, follow-system by default) for the native
   surface, including errors and approval prompts.
 - **Attachments** in the native composer: images (compressed), PDF (rendered page
-  by page), docx, and plain text / code files.
+  by page), docx, and plain text / code files. Several files can be queued at
+  once and are shown as removable chips before sending.
 - **Iteration tree**: rounds, parallel groups, cached results, statuses and
   elapsed time, with click-to-jump to the matching message.
 - **Themes and feedback**: dark / light / follow-system for the native UI, plus
-  optional UI sounds and system TTS read-aloud.
+  optional UI sounds.
+- **Mascot motion**: the home hero draws the v2 “Ming” beacon with layered glow
+  (breathing, drifting, halo), and the thinking card shows the v1 “Cue” avatar
+  with a pulsing title. Animations only touch `graphicsLayer` and the draw pass,
+  so they never re-measure a list row.
+- **Attachments reach the Agent too**: files picked for an Agent task are copied
+  into app storage and passed with a local path, so tools can read the same file
+  the composer sent.
 - Mirror mode is kept as code only: the public build ships **no** persona text or
   portrait, and the settings page shows “no built-in persona” when the assets are
   absent. No persona assets, API keys, keystores or local paths are included.
 - New original **v1 Cue** launcher icon (square, round, adaptive foreground on a
-  `#0A1312` plate, monochrome) generated from `docs/mascot/v1/`; the v2/v3
-  proposals are kept under `docs/mascot/` for future selection.
+  `#0A1312` plate, monochrome) generated from `docs/mascot/v1/`; the in-app
+  mascot art (`res/drawable-nodpi/mascot_cue.png`, `mascot_moon.png`) comes from
+  the same artwork, and all three proposals stay under `docs/mascot/`.
 - VersionCode 31 / versionName 2.0.
 
 ## 1.4.1

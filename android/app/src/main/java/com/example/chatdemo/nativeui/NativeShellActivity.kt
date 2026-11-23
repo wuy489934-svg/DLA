@@ -48,6 +48,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -90,8 +91,8 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -298,41 +299,15 @@ private fun NativeApp(
 
 @Composable
 private fun HomeHero() {
-    val transition = rememberInfiniteTransition(label = "hero")
-    val glow by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.6f,
-        animationSpec = infiniteRepeatable(tween(2600), RepeatMode.Reverse),
-        label = "glow",
-    )
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            modifier = Modifier
-                .size(132.dp)
-                .background(
-                    Brush.radialGradient(
-                        listOf(
-                            DlaColors.Mint.copy(alpha = glow),
-                            DlaColors.Mint.copy(alpha = glow * 0.35f),
-                            Color.Transparent,
-                        ),
-                    ),
-                    CircleShape,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(DlaColors.Warm),
-            )
-        }
+        // v2「溟灯」：分层光效（径向渐变呼吸 + 立绘漂浮 + 旋转光晕 + 漂移光斑），
+        // 实现在 MascotView.kt；动画只走 graphicsLayer / 绘制层，不参与测量。
+        MoonBeacon()
         Text(
             Lang.t("今天想让我做什么？"),
             color = DlaColors.Text,
@@ -345,7 +320,7 @@ private fun HomeHero() {
             color = DlaColors.TextDim,
             fontSize = 11.sp,
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -669,38 +644,51 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                     ChatEngine.reconcileIfStuck()
                 }
             }
-            LazyColumn(
-                state = listState,
-                reverseLayout = true,
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (current?.streaming == true) {
-                    item(key = "draft") {
-                        DraftMessage(current)
-                    }
+                // 空会话：把「极淡版」溟灯垫在消息列表下层（先画背景，再画 LazyColumn）。
+                // 光效没有任何 pointerInput，不参与命中测试，滚动/点击仍由上层列表处理。
+                if (messages.isEmpty() && current?.streaming != true) {
+                    MoonBeaconBackdrop(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .offset(y = 40.dp),
+                    )
                 }
-                items(reversed, key = { it.key }) { row ->
-                    when (row) {
-                        is ChatRow.User -> UserMessageRow(row.message)
-                        is ChatRow.Tree -> IterationTree(
-                            rounds = row.rounds,
-                            modifier = Modifier.fillMaxWidth(),
-                            onLocate = { round ->
-                                val target = reversed.indexOfFirst {
-                                    it is ChatRow.BlockRow &&
-                                        it.message.id == row.message.id &&
-                                        (it.block as? Block.Tool)?.round == round
-                                }
-                                if (target >= 0) {
-                                    scope.launch { listState.animateScrollToItem(target) }
-                                }
-                            },
-                        )
-                        is ChatRow.BlockRow -> BlockRowView(row.block)
+                LazyColumn(
+                    state = listState,
+                    reverseLayout = true,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (current?.streaming == true) {
+                        item(key = "draft") {
+                            DraftMessage(current)
+                        }
+                    }
+                    items(reversed, key = { it.key }) { row ->
+                        when (row) {
+                            is ChatRow.User -> UserMessageRow(row.message)
+                            is ChatRow.Tree -> IterationTree(
+                                rounds = row.rounds,
+                                modifier = Modifier.fillMaxWidth(),
+                                onLocate = { round ->
+                                    val target = reversed.indexOfFirst {
+                                        it is ChatRow.BlockRow &&
+                                            it.message.id == row.message.id &&
+                                            (it.block as? Block.Tool)?.round == round
+                                    }
+                                    if (target >= 0) {
+                                        scope.launch { listState.animateScrollToItem(target) }
+                                    }
+                                },
+                            )
+                            is ChatRow.BlockRow -> BlockRowView(row.block)
+                        }
                     }
                 }
             }
@@ -888,6 +876,11 @@ private fun TypingDots() {
 @Composable
 private fun ThinkingCard(text: String, seconds: Double?) {
     var expanded by remember(text) { mutableStateOf(false) }
+    // 「思考中」= 还没有落定秒数，且流式仍在进行（busy 只在请求开始/结束时翻转，
+    // 不会随每个 token 触发重组）。只有这段时间跑动画。
+    val busy by ChatEngine.busy.collectAsState()
+    val thinking = seconds == null && busy
+    val titleAlpha = rememberThinkingTitleAlpha(thinking)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -898,7 +891,17 @@ private fun ThinkingCard(text: String, seconds: Double?) {
             .animateContentSize(tween(180)),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(Lang.t("思考过程"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            // v1 Cue：思考中做 2.4s 呼吸 + 薄荷外发光，结束后立刻静止；
+            // 头像固定占 30dp，动画只改图层，卡片高度不随动画变化。
+            CueThinkingAvatar(thinking = thinking, size = 30.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                Lang.t("思考过程"),
+                color = DlaColors.TextDim,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.graphicsLayer { alpha = titleAlpha.value },
+            )
             seconds?.let { Text("  ${"%.1f".format(it)}s", color = DlaColors.TextDim, fontSize = 10.sp) }
             Spacer(Modifier.weight(1f))
             Text(if (expanded) Lang.t("收起") else Lang.t("展开"), color = DlaColors.Mint, fontSize = 10.sp)

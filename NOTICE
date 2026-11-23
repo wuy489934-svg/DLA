@@ -10,10 +10,12 @@ Upstream web UI
   MIT License — see licenses/chat-demo-MIT.txt
 
 Launcher icon and mascot
-  Original artwork created for DLA ("v1 Cue": dark #0A1312 plate, mint terminal
-  body, warm antenna and prompt bar). No third-party character artwork or icon
-  set is used. The mascot proposals under docs/mascot/ are generated from the
-  same original artwork and carry the project's Apache-2.0 license.
+  Original artwork created for DLA: the launcher icon is the v1 "Cue" character
+  (dark #0A1312 plate, mint terminal body, warm antenna and prompt bar), and the
+  in-app mascot art is the same v1 Cue avatar plus the v2 "Ming" beacon used on
+  the home screen. No third-party character artwork or icon set is used. The
+  mascot proposals under docs/mascot/ are generated from the same original
+  artwork and carry the project's Apache-2.0 license.
 
 Bundled renderer assets
   KaTeX 0.16.11 (MIT) — math typesetting; fonts have their own OFL terms.

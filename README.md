@@ -19,9 +19,9 @@
 
 **DLA 是一个把模型接到你自己手机上的本地智能体。** 对话、附件、会话、设置和诊断全部留在本机，模型请求直达你自己填写的 DeepSeek 兼容端点；项目本身不做中转、不上报、不接入遥测，也不需要登录任何账号。它**不是安全沙箱**：为了完成任务，Agent 必须能读屏、枚举应用、执行 shell 命令，所以公开版本默认逐次审批、“完全权限”默认关闭；网页、通知、文档里出现的内容一律当作“资料”而不是“指令”——**真正的安全边界是你在什么时候点了允许**。DLA 与深度求索公司无关，也不是官方客户端。
 
-![DLA 2.0 真机截图：原生 Compose 设置页](docs/assets/screenshot-native-settings.png)
+![DLA 2.0 真机截图：原生 Compose 首页](docs/assets/screenshot-native-home.png)
 
-<p align="center"><sub>2.0 原生 Compose 界面（真机截图）：主题、语言、深度思考、完全权限、音效与朗读全部在设置里</sub></p>
+<p align="center"><sub>2.0 原生 Compose 首页（真机截图）：v2「溟灯」吉祥物、LLM / Agent 双入口与会话列表</sub></p>
 
 ![DLA 演示：一句话 → 工具调用 → 可验证结果](docs/assets/demo.gif)
 
@@ -34,7 +34,8 @@
 - **两种执行后端，任选其一**：有 Shizuku 就用系统 shell 与无障碍；没有 Shizuku 也能用 Termux 作为通用终端（Node/Python/rg/网络/包管理）。**两者至少有一个可用就能对话**，都没有才禁止发送并给出开启路径。点停止时 Termux 里本次运行的整棵进程树会被一起杀掉，不会留下后台 npm/python。
 - **工具按需发现**：初始只注入少量核心手机操作；shell、Termux、文件、设置、zip、docx 等都要先 `tool_search` 搜索，命中后下一轮才进入工具列表，避免一次把几十个工具塞进上下文。
 - **看得见的执行过程**：工具调用、耗时、缓存、并行组、迭代树、审批卡全部可见，长任务在通知栏也能停止。
-- **附件与多语言**：图片、PDF（逐页渲染）、docx、纯文本/代码都能作为附件发送；界面与回复支持中英双语，主题支持深色/浅色/跟随系统，并可开关界面音效与系统 TTS 朗读。
+- **附件与多语言**：图片、PDF（逐页渲染）、docx、纯文本/代码都能作为附件发送，输入栏用标签列出待发附件、可一次挑多个文件；界面与回复支持中英双语，主题支持深色/浅色/跟随系统，并可开关界面音效。
+- **吉祥物动效**：首页是 v2「溟灯」的分层光效（呼吸 + 漂浮 + 光晕），思考态是 v1「Cue」头像与标题闪烁；动画只走绘制层与 `graphicsLayer`，不参与布局测量。
 - **单 APK、原生优先**：不 fork 新进程跑工具、不打包重型运行时（Termux 是你自己安装的独立 App）。
 
 ## Agent 运行时路径（完整链路）
@@ -128,7 +129,7 @@ licenses/  第三方许可证原文
 
 - 本项目原创代码：**Apache License 2.0**（见 `LICENSE`）。
 - `web/` 含 MIT 许可的上游代码（见 `licenses/chat-demo-MIT.txt`）。
-- **图标与吉祥物为本项目原创**（v1 Cue，见 [`docs/mascot/`](docs/mascot/README.md)），与本仓库同许可；`docs/assets/` 内的图标与演示图可直接用于介绍 DLA。
+- **图标与吉祥物为本项目原创**：应用图标为 v1「Cue」，首页与思考态使用 v1/v2 吉祥物动效（见 [`docs/mascot/`](docs/mascot/README.md)），与本仓库同许可；`docs/assets/` 内的图标与演示图可直接用于介绍 DLA。
 - KaTeX 与 mermaid 按 MIT 许可随 APK 内置（见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)）。
 - 不捆绑、不分发官方 Demo 的角色素材或未授权插画；`chat-demo:*` 存储键仅为兼容旧数据，不代表产品身份。
 - 第三方组件许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`NOTICE`](NOTICE)。
