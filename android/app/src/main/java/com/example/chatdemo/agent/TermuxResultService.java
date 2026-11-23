@@ -17,6 +17,9 @@ public class TermuxResultService extends android.app.IntentService {
             return;
         }
         android.os.Bundle bundle = intent.getBundleExtra("result");
+        // 同一进程内（AgentRunner 也跑在 :agent）走静态 future 快路径
         TermuxBridge.complete(id, bundle);
+        // 其它进程（设置页、网页壳）只能靠广播拿到结果
+        TermuxBridge.broadcastResult(getApplicationContext(), id, bundle);
     }
 }

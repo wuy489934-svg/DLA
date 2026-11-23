@@ -107,7 +107,8 @@ android/app/src/main/java/com/example/chatdemo/
   nativeui/MarkdownCompose.kt             普通 Markdown 的原生 Compose 渲染
   nativeui/Markdown.kt                    隔离 WebView：仅加载 assets/renderer 里的 KaTeX / mermaid
   nativeui/SessionStore.kt                files/native-sessions 的会话落盘
-  nativeui/SystemFiles.kt                 SAF 文件夹授权 + 递归列出（24/深度 3/8MB）并导入 agent-uploads
+  nativeui/SystemFiles.kt                 SAF 文件夹授权 + 递归列出（24/深度 3/8MB）并导入 agent-uploads（未给「所有文件访问权限」时的兜底）
+  nativeui/FileBrowser.kt                 📂 应用内文件浏览：真实路径列目录、递归搜索、多选 / 整文件夹导入
   agent/AgentClient.java                  UI 进程门面：bindService + Messenger + attach 回放
   agent/AgentIpc.java                     跨进程协议常量（MSG_* / KEY_*）
   agent/AccessibilityStatus.java          读 Settings.Secure 判断无障碍是否开启（跨进程有效）

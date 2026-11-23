@@ -1,12 +1,16 @@
 package com.example.chatdemo.agent;
 
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+
+import androidx.core.content.ContextCompat;
 
 import org.json.JSONObject;
 
@@ -64,6 +68,16 @@ public final class TermuxBridge {
     private static final String EXTRA_EXIT_CODE = "exitCode";
     private static final String EXTRA_ERR = "err";
     private static final String EXTRA_ERRMSG = "errmsg";
+    /**
+     * 结果回传广播。
+     *
+     * <p>TermuxResultService 跑在 <code>:agent</code> 进程，而「设置 → 高级设置」和网页壳都在主进程：
+     * 两边各有一份静态 PENDING，主进程放进去的 future 永远不会被 :agent 里的 service 完成，
+     * 表现为「测试连通」等 8 秒后报「Termux 没有返回结果」，可 Agent 工具里又一切正常。
+     * 所以 service 拿到结果后额外广播一次（只发给本应用），调用方用运行时 receiver 收。
+     */
+    public static final String ACTION_RESULT = "com.example.chatdemo.action.TERMUX_RESULT";
+    private static final String EXTRA_REQUEST_ID = "dla_termux_request_id";
     private static final String BASH = "/data/data/com.termux/files/usr/bin/bash";
     private static final String HOME = "/data/data/com.termux/files/home";
     /** 出现在被包装命令 cmdline / 环境里的标记前缀；后面拼 runId。 */
@@ -173,13 +187,34 @@ public final class TermuxBridge {
         }
         long timeout = Math.max(2000L, Math.min(timeoutMs, 600_000L));
         String runId = UUID.randomUUID().toString();
-        int id = NEXT_ID.incrementAndGet();
+        final int id = NEXT_ID.incrementAndGet();
         CompletableFuture<Result> future = new CompletableFuture<>();
         PENDING.put(id, future);
         ACTIVE.add(runId);
+        // 跨进程唤醒：结果由 :agent 里的 TermuxResultService 广播回来（见 ACTION_RESULT 注释）。
+        final BroadcastReceiver receiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context receiverContext, Intent receiverIntent) {
+                if (receiverIntent == null) {
+                    return;
+                }
+                if (receiverIntent.getIntExtra(EXTRA_REQUEST_ID, -1) != id) {
+                    return;
+                }
+                complete(id, receiverIntent.getBundleExtra(EXTRA_RESULT_BUNDLE));
+            }
+        };
+        boolean registered = false;
         try {
+            ContextCompat.registerReceiver(
+                    context,
+                    receiver,
+                    new IntentFilter(ACTION_RESULT),
+                    ContextCompat.RECEIVER_NOT_EXPORTED);
+            registered = true;
+
             Intent resultIntent = new Intent(context, TermuxResultService.class);
-            resultIntent.putExtra("dla_termux_request_id", id);
+            resultIntent.putExtra(EXTRA_REQUEST_ID, id);
             int flags = PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 flags |= PendingIntent.FLAG_MUTABLE;
@@ -222,6 +257,13 @@ public final class TermuxBridge {
                     error.getMessage() == null ? error.getClass().getSimpleName()
                             : error.getMessage());
         } finally {
+            if (registered) {
+                try {
+                    context.unregisterReceiver(receiver);
+                } catch (Throwable throwable) {
+                    Log.w(TAG, "unregister termux receiver failed: " + throwable.getMessage());
+                }
+            }
             ACTIVE.remove(runId);
             PENDING.remove(id);
         }
@@ -364,6 +406,27 @@ public final class TermuxBridge {
         script.append("exit 0\n");
         return script.toString();
     }
+    /**
+     * 把结果再广播一次（只发给本应用），供其它进程里的 {@link #run} 收。
+     *
+     * 调用方在 run() 里注册了同名 action 的运行时 receiver；广播不到就只会超时，
+     * 所以这里失败也只记日志，不抛。
+     */
+    static void broadcastResult(Context context, int id, Bundle bundle) {
+        if (context == null) {
+            return;
+        }
+        try {
+            Intent broadcast = new Intent(ACTION_RESULT);
+            broadcast.setPackage(context.getPackageName());
+            broadcast.putExtra(EXTRA_REQUEST_ID, id);
+            broadcast.putExtra(EXTRA_RESULT_BUNDLE, bundle);
+            context.sendBroadcast(broadcast);
+        } catch (Throwable throwable) {
+            Log.w(TAG, "broadcast termux result failed: " + throwable.getMessage());
+        }
+    }
+
     static void complete(int id, Bundle bundle) {
         CompletableFuture<Result> future = PENDING.remove(id);
         if (future == null) {

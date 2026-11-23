@@ -27,11 +27,30 @@
 - **Attachments** in the native composer: images (compressed), PDF (rendered page
   by page), docx, and plain text / code files. Several files can be queued at
   once and are shown as removable chips before sending.
-- **Folder batch import**: long-press the attach icon to grant a folder over SAF;
-  the app walks it recursively (max 24 files, depth 3, 8 MB per file), copies the
+- **Folder batch import** (fallback path): when *All files access* is not
+  granted, the permission card still offers the SAF folder picker; the app walks
+  the granted tree recursively (max 24 files, depth 3, 8 MB per file), copies the
   files into `agent-uploads` and attaches them with real paths, so Termux tools
   can `cat`/`pdftotext`/`unzip` exactly what was imported. The granted tree URI is
   stored in the `folderUri` preference.
+- **On-device file browser (📂)**: the attach slot opens a built-in browser
+  instead of the system picker — it starts in `Pictures`, offers quick jumps
+  (pictures / camera / downloads / documents / storage root), a breadcrumb with
+  *up*, a **search box that walks the current folder recursively** (depth 6, 300
+  hits, hidden dirs and `Android/` skipped), multi-select, and “import this
+  folder” in Agent sessions. It needs *All files access*
+  (`MANAGE_EXTERNAL_STORAGE`, falling back to `READ_EXTERNAL_STORAGE` on Android
+  10 and below); without it the app shows a one-tap permission card, so the
+  Android 11+ “for your privacy, choose another folder” screen never appears in
+  the normal path. The system picker remains only as a fallback entry.
+- **Search inside attachments**: files are matched while typing, and results show
+  the folder they live in, so a document can be found without drilling down.
+- **No voice input**: the microphone entry was removed from the native composer
+  and from the web shell, and `RECORD_AUDIO` / `MODIFY_AUDIO_SETTINGS` are no
+  longer requested.
+- **Launcher icons rebuilt to the adaptive safe area**: mascot art is scaled to
+  50% of the 108dp canvas (the visible square is 72dp), so the chibi and the Cue
+  robot are fully visible under any shape mask instead of bleeding into it.
 - **Iteration tree**: rounds, parallel groups, cached results, statuses and
   elapsed time, with click-to-jump to the matching message.
 - **Themes and feedback**: dark / light / follow-system for the native UI, plus
@@ -50,7 +69,14 @@
   `#0A1312` plate, monochrome) generated from `docs/mascot/v1/`; the in-app
   mascot art (`res/drawable-nodpi/mascot_cue.png`, `mascot_moon.png`) comes from
   the same artwork, and all three proposals stay under `docs/mascot/`.
-- VersionCode 35 / versionName 2.0.
+- **Fixed: “Termux test” failed while the Agent worked.** `TermuxResultService`
+  runs in the `:agent` process, so a `TermuxBridge.run()` issued from the UI
+  process (Settings → Advanced → Termux environment → *Test*) could never be
+  completed by its in-process future and always timed out with “Termux did not
+  return a result”. The result service now also broadcasts the result inside the
+  app, and the caller registers a runtime receiver, so both processes see it and
+  the test returns `DLA_TERMUX_OK` in about a second.
+- VersionCode 36 / versionName 2.0.
 
 ## 1.4.1
 
