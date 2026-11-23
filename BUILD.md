@@ -4,26 +4,24 @@
 
 - JDK 17+ (JDK 21 tested)
 - Android SDK Platform 36, Build Tools 35+
-- Node.js 20+ and pnpm
+- Python 3.12 on the build machine (Chaquopy compiles the stdlib to pyc)
+- `curl` + `tar` (the native runtimes are fetched by `scripts/fetch-native.sh`)
 - Gradle is provided by the wrapper (`android/gradlew`)
 - Kotlin 2.1.0, the Compose compiler plugin and Compose BOM 2024.09.03 are resolved by Gradle automatically (jvmTarget 17); no separate install.
 - `android/app/src/main/assets/renderer/` (KaTeX 0.16.11 + mermaid 10.9.1) is committed to the repo, so a build does not need network access for it.
 
-## 1. Build the web UI
+## 1. Fetch the bundled runtimes
 
 ```bash
-cd web
-pnpm install
-pnpm typecheck
-pnpm build
+bash scripts/fetch-native.sh    # libnode / libdshnode / librg / libc++ → android/app/src/main/jniLibs/arm64-v8a
 ```
 
-`web/dist/` is generated and ignored by Git.
+These binaries are not in Git (about 91 MB). CPython comes from Chaquopy at build time.
 
 ## 2. Build Android
 
 ```bash
-cd ../android
+cd android
 ./gradlew assembleDebug
 ```
 

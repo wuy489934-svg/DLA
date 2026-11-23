@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 📂 本机文件浏览：按真实路径读文件（Android 11+ 用「所有文件访问权限」，
-         10 及以下退回读存储权限）。不再需要麦克风权限：语音输入入口已删除。 -->
+         10 及以下退回读存储权限）。 -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -20,16 +20,17 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 列出全部应用（模型需要「应用名 | 包名」来打开应用）；仅侧载/自用 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <!-- Termux RUN_COMMAND：在 Termux 环境执行命令 -->
-    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
-        <package android:name="com.termux" />
     </queries>
 
+    <!-- extractNativeLibs=true：把内置的 node/ripgrep 解压到 nativeLibraryDir，
+         这是 targetSdk 29+ 上应用唯一能 exec 的位置。 -->
     <application
+        android:name=".DlaApplication"
         android:allowBackup="false"
+        android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"
@@ -38,19 +39,7 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">
 
-        <activity
-            android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|locale|layoutDirection"
-            android:exported="true"
-            android:launchMode="singleTask"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name=".ImageViewerActivity"
-            android:exported="false"
-            android:theme="@style/ViewerTheme" />
-
-        <!-- 原生 Compose 壳（方案 B）：默认入口；网页界面降级为可选外壳 -->
+        <!-- 原生 Compose 界面（唯一入口） -->
         <activity
             android:name=".nativeui.NativeShellActivity"
             android:exported="true"
@@ -73,12 +62,6 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="本地 Agent 长时任务执行" />
         </service>
-
-        <!-- 接收 Termux RUN_COMMAND 结果 -->
-        <service
-            android:name=".agent.TermuxResultService"
-            android:process=":agent"
-            android:exported="false" />
 
         <!-- 开机/升级后恢复未完成 Agent 任务 -->
         <receiver

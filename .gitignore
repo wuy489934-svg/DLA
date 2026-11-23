@@ -37,3 +37,6 @@ tmp/
 
 evals/results/
 
+
+# 内置运行时（Node / ripgrep / Chaquopy 由脚本获取，不进仓库）
+android/app/src/main/jniLibs/

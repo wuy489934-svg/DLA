@@ -1,7 +1,5 @@
 package com.example.chatdemo.nativeui
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -15,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,34 +47,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.chatdemo.agent.Diagnostics
 import com.example.chatdemo.agent.McpStore
-import com.example.chatdemo.agent.TermuxBridge
+import com.example.chatdemo.agent.NativeShell
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.UUID
 
 /**
- * 高级设置：MCP 服务器、Termux 环境、数据管理。
+ * 高级设置：MCP 服务器、运行环境、数据管理。
  *
  * 只负责界面与本地状态，能力全部复用已有实现：
  * - MCP：agent 包 McpStore，配置落在 SharedPreferences 的 servers 数组里；
- * - Termux：agent 包 TermuxBridge，结果对象带 text() 与 isError()；
+ * - 运行环境：本机终端 / Python / Node / ripgrep 全部内置，[RuntimeStatus] 做自检；
  * - 数据：agent 包 Diagnostics 导出 zip，本包 SessionStore 管理 files/native-sessions。
  *
  * 约定：磁盘与跨进程调用一律 withContext(Dispatchers.IO)，主线程只改 Compose 状态；
  * 不使用 WebView，不引入新依赖。
- *
- * 说明：SessionStore 的 importLegacy() 是 init 内的私有方法（构造时自动补一次网页历史），
- * 因此这里不提供手动导入按钮，只读取 cards() 展示数量并支持删除。
  */
 
-private const val TERMUX_TEST_COMMAND = "echo DLA_TERMUX_OK"
-private const val TERMUX_TEST_TIMEOUT_MS = 8000L
-private const val TERMUX_RESULT_LIMIT = 400
-private const val TERMUX_ALLOW_COMMAND =
-    "echo \"allow-external-apps=true\" >> ~/.termux/termux.properties && termux-reload-settings"
+private const val RUNTIME_RESULT_LIMIT = 600
 
 /** 列表展示用的 MCP 服务器快照（原始数据仍在 McpStore 的 JSON 里） */
 private data class McpEntry(
@@ -83,13 +74,6 @@ private data class McpEntry(
     val name: String,
     val url: String,
     val enabled: Boolean,
-)
-
-/** Termux 状态快照 */
-private data class TermuxInfo(
-    val installed: Boolean = false,
-    val version: String = "",
-    val granted: Boolean = false,
 )
 
 /** 读取 MCP 列表；只应在 IO 线程调用 */
@@ -110,7 +94,7 @@ private fun readMcpEntries(context: Context): List<McpEntry> {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
+fun AdvancedSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val appContext: Context = remember(context) { context.applicationContext }
     val scope = rememberCoroutineScope()
@@ -124,13 +108,12 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
     var mcpToken by remember { mutableStateOf("") }
     var mcpError by remember { mutableStateOf<String?>(null) }
 
-    // Termux 环境
-    var termuxInfo by remember { mutableStateOf(TermuxInfo()) }
-    var termuxRefresh by remember { mutableStateOf(0) }
-    var termuxResult by remember { mutableStateOf("") }
-    var termuxFailed by remember { mutableStateOf(false) }
-    var termuxTesting by remember { mutableStateOf(false) }
-    var termuxCopied by remember { mutableStateOf(false) }
+    // 运行环境（本机终端 / Python / Node / ripgrep）
+    var runtime by remember { mutableStateOf(RuntimeSnapshot()) }
+    var runtimeRefresh by remember { mutableStateOf(0) }
+    var runtimeResult by remember { mutableStateOf("") }
+    var runtimeFailed by remember { mutableStateOf(false) }
+    var runtimeTesting by remember { mutableStateOf(false) }
 
     // 数据
     var sessionCount by remember { mutableStateOf(-1) }
@@ -145,20 +128,8 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
         mcpEntries = withContext(Dispatchers.IO) { readMcpEntries(appContext) }
     }
 
-    LaunchedEffect(termuxRefresh) {
-        val status = withContext(Dispatchers.IO) { TermuxBridge.status(appContext) }
-        termuxInfo = TermuxInfo(
-            installed = status.optBoolean("installed", false),
-            version = status.optString("version"),
-            granted = status.optBoolean("granted", false),
-        )
-    }
-
-    LaunchedEffect(termuxCopied) {
-        if (termuxCopied) {
-            delay(2500)
-            termuxCopied = false
-        }
+    LaunchedEffect(runtimeRefresh) {
+        runtime = withContext(Dispatchers.IO) { RuntimeStatus.probe(appContext) }
     }
 
     LaunchedEffect(sessionRefresh) {
@@ -200,12 +171,6 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
         }
     }
 
-    val openTermux: () -> Unit = {
-        scope.launch {
-            withContext(Dispatchers.IO) { runCatching { TermuxBridge.open(appContext) } }
-        }
-    }
-
     val openAppSettings: () -> Unit = {
         val intent = Intent(
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -214,27 +179,28 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
         runCatching { context.startActivity(intent) }
     }
 
-    val copyTermuxCommand: () -> Unit = {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        if (clipboard != null) {
-            clipboard.setPrimaryClip(ClipData.newPlainText(Lang.t("Termux 授权命令"), TERMUX_ALLOW_COMMAND))
-            termuxCopied = true
-        }
-    }
-
-    val testTermux: () -> Unit = {
-        if (!termuxTesting) {
-            termuxTesting = true
-            termuxResult = ""
-            termuxFailed = false
+    // 真跑一条命令：同时验证 shell、Node、ripgrep 三个内置运行时
+    val testRuntime: () -> Unit = {
+        if (!runtimeTesting) {
+            runtimeTesting = true
+            runtimeResult = ""
+            runtimeFailed = false
             scope.launch {
                 val result = withContext(Dispatchers.IO) {
-                    TermuxBridge.run(appContext, TERMUX_TEST_COMMAND, TERMUX_TEST_TIMEOUT_MS)
+                    runCatching {
+                        NativeShell.execute(
+                            appContext,
+                            JSONObject().put(
+                                "command",
+                                "id -u; toybox | wc -w; node -v; rg --version | head -1",
+                            ),
+                        )
+                    }.getOrNull()
                 }
-                termuxResult = result.text()
-                termuxFailed = result.isError()
-                termuxTesting = false
-                termuxRefresh += 1
+                runtimeResult = result?.text.orEmpty()
+                runtimeFailed = result?.isError ?: true
+                runtimeTesting = false
+                runtimeRefresh += 1
             }
         }
     }
@@ -402,7 +368,7 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
                 }
             }
 
-            // ---------------- Termux 环境 ----------------
+            // ---------------- 运行环境 ----------------
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = DlaColors.Surface),
@@ -413,55 +379,49 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SectionTitle(Lang.t("Termux 环境"))
+                    SectionTitle(Lang.t("运行环境"))
                     Text(
-                        Lang.t("需要 Termux 里 allow-external-apps=true 并给 DLA 授予 Run commands 权限。"),
+                        Lang.t("全部内置，不需要安装 Termux；命令以应用身份运行，不会修改系统。"),
                         color = DlaColors.TextDim,
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
                     )
-                    Text(
-                        Lang.t(
-                            "Termux：%s",
-                            if (termuxInfo.installed) Lang.t("已安装") else Lang.t("未安装"),
-                        ),
-                        color = if (termuxInfo.installed) DlaColors.Mint else DlaColors.Warm,
-                        fontSize = 12.sp,
+                    RuntimeRow(
+                        Lang.t("本机终端"),
+                        if (runtime.checked) {
+                            Lang.t("Android %s · toybox %d 条命令", runtime.androidRelease, runtime.shellCommands)
+                        } else {
+                            Lang.t("检测中…")
+                        },
                     )
-                    if (termuxInfo.version.isNotBlank()) {
-                        Text(Lang.t("版本：%s", termuxInfo.version), color = DlaColors.TextDim, fontSize = 11.sp)
-                    }
-                    Text(
-                        Lang.t(
-                            "Run commands 权限：%s",
-                            if (termuxInfo.granted) Lang.t("已授予") else Lang.t("未授予"),
-                        ),
-                        color = if (termuxInfo.granted) DlaColors.Mint else DlaColors.Warm,
-                        fontSize = 12.sp,
+                    RuntimeRow(
+                        Lang.t("Python"),
+                        if (runtime.checked) Lang.t("内置 %s", runtime.pythonVersion) else Lang.t("检测中…"),
                     )
+                    RuntimeRow(
+                        Lang.t("Node"),
+                        if (runtime.checked) Lang.t("内置 %s", runtime.nodeVersion) else Lang.t("检测中…"),
+                    )
+                    RuntimeRow(
+                        Lang.t("ripgrep"),
+                        if (runtime.checked) Lang.t("内置 %s", runtime.rgVersion) else Lang.t("检测中…"),
+                    )
+                    RuntimeRow(Lang.t("工作目录"), runtime.home.ifBlank { "…" })
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = openTermux) {
-                            Text(Lang.t("打开 Termux"), fontSize = 12.sp)
+                        OutlinedButton(onClick = testRuntime, enabled = !runtimeTesting) {
+                            Text(if (runtimeTesting) Lang.t("自检中…") else Lang.t("运行自检"), fontSize = 12.sp)
                         }
                         OutlinedButton(onClick = openAppSettings) {
                             Text(Lang.t("应用权限"), fontSize = 12.sp)
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = testTermux, enabled = !termuxTesting) {
-                            Text(if (termuxTesting) Lang.t("测试中…") else Lang.t("测试连通"), fontSize = 12.sp)
-                        }
-                        OutlinedButton(onClick = copyTermuxCommand) {
-                            Text(if (termuxCopied) Lang.t("已复制") else Lang.t("复制授权命令"), fontSize = 12.sp)
-                        }
-                    }
 
-                    if (termuxResult.isNotEmpty()) {
+                    if (runtimeResult.isNotEmpty()) {
                         HorizontalDivider(color = DlaColors.Line)
                         Text(
-                            termuxResult.take(TERMUX_RESULT_LIMIT),
-                            color = if (termuxFailed) DlaColors.Error else DlaColors.Text,
+                            runtimeResult.take(RUNTIME_RESULT_LIMIT),
+                            color = if (runtimeFailed) DlaColors.Error else DlaColors.Text,
                             fontSize = 11.sp,
                             lineHeight = 16.sp,
                             fontFamily = FontFamily.Monospace,
@@ -488,7 +448,7 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
                         fontSize = 12.sp,
                     )
                     Text(
-                        Lang.t("网页留下的历史会在原生会话仓库初始化时自动导入一次，只补缺失，无需手动导入。"),
+                        Lang.t("旧版本留下的历史会在会话仓库初始化时自动导入一次，只补缺失，无需手动导入。"),
                         color = DlaColors.TextDim,
                         fontSize = 11.sp,
                         lineHeight = 16.sp,
@@ -531,14 +491,10 @@ fun AdvancedSettingsScreen(onBack: () -> Unit, onOpenWeb: () -> Unit) {
                         )
                     }
 
-                    HorizontalDivider(color = DlaColors.Line)
-                    OutlinedButton(onClick = onOpenWeb) {
-                        Text(Lang.t("打开网页界面"), color = DlaColors.Warm, fontSize = 12.sp)
-                    }
                 }
             }
 
-            ShizukuCard()
+            PhoneCapabilityCard()
         }
     }
 
@@ -616,5 +572,23 @@ private fun McpEntryRow(entry: McpEntry, onRemove: () -> Unit) {
         TextButton(onClick = onRemove) {
             Text(Lang.t("删除"), color = DlaColors.Error, fontSize = 12.sp)
         }
+    }
+}
+@Composable
+private fun RuntimeRow(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            color = DlaColors.TextDim,
+            fontSize = 11.sp,
+            modifier = Modifier.width(76.dp),
+        )
+        Text(
+            value,
+            color = DlaColors.Text,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }

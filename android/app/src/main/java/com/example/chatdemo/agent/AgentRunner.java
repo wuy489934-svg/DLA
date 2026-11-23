@@ -44,8 +44,6 @@ public final class AgentRunner {
     }
 
     private static final int MAX_TOOL_RESULT_CHARS = 24000;
-    /** Termux RUN_COMMAND 权限名；用于判断 termux 工具是否真的可用 */
-    private static final String TERMUX_RUN_COMMAND = "com.termux.permission.RUN_COMMAND";
     private static final int MAX_ROUNDS = 120;
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final int MAX_STEPS_IN_PLAN = 30;
@@ -144,23 +142,55 @@ public final class AgentRunner {
     private final Map<String, JSONObject> localCatalog = new LinkedHashMap<>();
     private final Set<String> discoveredLocal = new HashSet<>();
     /**
-     * 核心工具：只直接下发读屏/点击/输入这类高频手机操作。
-     * shell 类（phone_shell）和 Termux 统一交给 tool_search 按需发现，
-     * 避免把 shell/终端能力一次性全部注入。
+     * 核心工具：直接下发的读屏/点击/输入类操作 + 本机终端。
+     * phone_sh 是默认执行入口（应用身份、无需任何外部依赖），所以放进核心；
+     * phone_py / phone_js 与文件、设置等能力仍由 tool_search 按需发现。
      */
     private static final Set<String> CORE_LOCAL = new HashSet<>(Arrays.asList(
             "phone_screen", "phone_tap_text", "phone_wait",
             "phone_tap", "phone_swipe", "phone_input", "phone_key",
-            "phone_screenshot", "phone_view_image", "phone_open", "phone_apps", "phone_device"
+            "phone_screenshot", "phone_view_image", "phone_open", "phone_apps", "phone_device",
+            NativeShell.NAME
     ));
-    /**
-     * 不需要无障碍/Shizuku 就能用的本地工具：只用到文件系统与解码。
-     * 没有 Shizuku 时也必须注册，否则「看这张图」这类基础请求会没有工具可调。
-     */
-    private static final Set<String> NO_PRIVILEGE_LOCAL = new HashSet<>(Arrays.asList(
-            "phone_view_image", "phone_read", "phone_files", "phone_file_info",
-            "phone_device", "phone_docx_text", "phone_zip_list"
+    /** 必须有 uid 2000 shell 才能做的事（其余工具都不该被 Shizuku 卡住）。 */
+    private static final Set<String> NEEDS_SHIZUKU = new HashSet<>(Arrays.asList(
+            "phone_shell", "phone_stop", "phone_setting_put", "phone_notifications"
     ));
+    /** 必须有无障碍连接才能读屏/截图。 */
+    private static final Set<String> NEEDS_ACCESSIBILITY = new HashSet<>(Arrays.asList(
+            "phone_screen", "phone_wait", "phone_screenshot", "phone_tap_text"
+    ));
+    /** 无障碍优先；没有无障碍时 Shizuku 的 input 命令可以兜底。 */
+    private static final Set<String> ACCESSIBILITY_OR_SHIZUKU = new HashSet<>(Arrays.asList(
+            "phone_tap", "phone_tap_shot", "phone_swipe", "phone_input", "phone_key"
+    ));
+
+    /** 按真实后端决定工具是否出现，而不是「没有 Shizuku 就全部砍掉」。 */
+    private static boolean toolAvailable(String name, boolean accessibility, boolean shizuku) {
+        if (NEEDS_SHIZUKU.contains(name)) {
+            return shizuku;
+        }
+        if (NEEDS_ACCESSIBILITY.contains(name)) {
+            return accessibility;
+        }
+        if (ACCESSIBILITY_OR_SHIZUKU.contains(name)) {
+            return accessibility || shizuku;
+        }
+        return true;
+    }
+
+    /** 固定的能力地图：短、稳、不进 tool_search 结果，避免模型在末尾才发现对的能力。 */
+    private static final String TOOL_MAP =
+            "【能力地图（先看这里再决定调用什么，不要反复猜工具名）】\n"
+            + "- 屏幕与输入：看界面 phone_screen、截图 phone_screenshot、点文字 phone_tap_text、"
+            + "点坐标 phone_tap、滑动 phone_swipe、输入 phone_input、按键 phone_key。"
+            + "这些走系统无障碍服务，不需要 Shizuku。工具不在列表里就说明无障碍没开，"
+            + "直接让用户去「设置 → 无障碍 → 已下载的应用」打开 DLA，不要换别的工具硬试。\n"
+            + "- 执行命令：phone_sh 是应用身份的本机终端，默认用它；只有 pm / am / settings / dumpsys "
+            + "这类特权命令才用 phone_shell（需要 Shizuku，未就绪时不会出现）。\n"
+            + "- 脚本：phone_py（Python）、phone_js（Node）先 tool_search 一次再调用。\n"
+            + "- 文件、设置、剪贴板、通知、zip、docx：先 tool_search。\n"
+            + "- 工具缺失时只说明「缺哪个后端、怎么开启」，不要连续换关键词反复试探同一能力。";
     private final Map<String, McpClient> clientByServer = new HashMap<>();
     /** 需要用户确认的 MCP 工具（按函数名） */
     private final Set<String> riskyTools = new HashSet<>();
@@ -192,6 +222,7 @@ public final class AgentRunner {
 
     public void cancel() {
         cancelled = true;
+        android.util.Log.d("DlaAgent", "cancel requested");
         HttpURLConnection connection = activeConnection;
         if (connection != null) {
             try {
@@ -200,11 +231,11 @@ public final class AgentRunner {
                 // 连接可能已关闭
             }
         }
-        // cancelled 只是让本线程不再等待。Termux 里的命令是 Termux 进程 fork 出来的，
-        // 和本线程没有父子关系，光置标志它会继续跑（npm/python/写文件都可能还在进行），
-        // 所以必须按 runId 主动把 Termux 里的整棵进程树杀掉。
+        // cancelled 只是让本线程不再等待。shell / Node 脚本可能是本进程的子进程，
+        // 也可能 fork 出整棵树，光置标志它们会继续跑（写文件、下载都可能还在进行），
+        // 所以必须主动把整棵进程树杀掉。
         try {
-            TermuxBridge.cancelAll(context);
+            RuntimeTools.cancelAll();
         } catch (Throwable ignored) {
             // cancelAll 自身已兜底，这里再防一层，绝不打断停止流程
         }
@@ -298,8 +329,7 @@ public final class AgentRunner {
                     start.put("input", call.arguments.length() == 0 ? "{}" : call.arguments.toString());
                     boolean needsApproval = !repeated && !autoApprove
                             && (LocalTools.requiresApproval(call.name)
-                            || TermuxTools.requiresApproval(call.name, call.arguments.length() == 0
-                                    ? new JSONObject() : new JSONObject(call.arguments.toString()))
+                            || RuntimeTools.requiresApproval(call.name)
                             || riskyTools.contains(call.name));
                     start.put("approval", needsApproval);
                     start.put("round", round + 1);
@@ -439,14 +469,12 @@ public final class AgentRunner {
             emit(event);
         } finally {
             activeConnection = null;
-            // 正常结束/异常/取消统一收尾：Termux 里若还有本次运行残留的进程就杀掉，
-            // 然后清空 active，避免留下再也无法取消的 runId。
+            // 正常结束/异常/取消统一收尾：还在跑的子进程（shell / node）整棵杀掉
             try {
-                TermuxBridge.cancelAll(context);
+                RuntimeTools.cancelAll();
             } catch (Throwable ignored) {
                 // cancelAll 自身已兜底
             }
-            TermuxBridge.clearActive();
         }
     }
 
@@ -755,17 +783,19 @@ public final class AgentRunner {
             status.put("text", "已连接 " + clientByServer.size() + " 个 MCP Server，共 " + tools.length() + " 个工具");
             emit(status);
         }
-        // 能力探测：Shizuku / Termux 有一样可用就能跑 Agent。
-        // 工具也按可用性裁剪：手机工具需要 Shizuku，shell 与 termux 只按需发现。
+        // 能力探测：三条后端互相独立——
+        // - 本机终端 phone_sh 永远可用（app 身份）；
+        // - 无障碍决定读屏/截图/点按文字；
+        // - Shizuku 只决定 pm/am/settings 这类特权命令。
+        ShizukuShell.init(context);
         boolean shizukuReady = ShizukuShell.running() && ShizukuShell.granted();
-        boolean termuxReady = TermuxBridge.isInstalled(context)
-                && context.checkSelfPermission(TERMUX_RUN_COMMAND)
-                == PackageManager.PERMISSION_GRANTED;
+        boolean accessibilityReady = ChatDemoAccessibilityService.ready();
+        RuntimeEnv.ensureLinks(context);
         int coreCount = 0;
         // 本地工具按可用性裁剪：
         // - 需要无障碍/Shizuku 的只在 Shizuku 就绪时出现；
-        // - 纯文件类（读图/读文本）不依赖 Shizuku，Termux-only 的设备也要能用，
-        //   否则「看看这张图」在没装 Shizuku 的手机上会直接变成「没有可用工具」。
+        // - 纯文件类（读图/读文本）不依赖 Shizuku，没装 Shizuku 的手机也要能用，
+        //   否则「看看这张图」会直接变成「没有可用工具」。
         JSONArray local = LocalTools.specs();
         for (int i = 0; i < local.length(); i++) {
             JSONObject spec = local.optJSONObject(i);
@@ -776,7 +806,7 @@ public final class AgentRunner {
             if (name.isEmpty()) {
                 continue;
             }
-            if (!shizukuReady && !NO_PRIVILEGE_LOCAL.contains(name)) {
+            if (!toolAvailable(name, accessibilityReady, shizukuReady)) {
                 continue;
             }
             localCatalog.put(name, spec);
@@ -785,24 +815,36 @@ public final class AgentRunner {
                 coreCount++;
             }
         }
-        if (termuxReady) {
-            // termux 不在初始 tools 里，只放进目录等 tool_search 取用。
-            localCatalog.put(TermuxTools.NAME, TermuxTools.spec());
+        // 内置运行时（shell / Python / Node）：不依赖任何外部应用，始终注册。
+        // phone_sh 在核心工具里，phone_py / phone_js 由 tool_search 按需发现。
+        JSONArray runtime = RuntimeTools.specs();
+        for (int i = 0; i < runtime.length(); i++) {
+            JSONObject spec = runtime.optJSONObject(i);
+            if (spec == null) {
+                continue;
+            }
+            String name = spec.optString("name");
+            if (name.isEmpty()) {
+                continue;
+            }
+            localCatalog.put(name, spec);
+            if (CORE_LOCAL.contains(name)) {
+                tools.put(spec);
+                coreCount++;
+            }
         }
         tools.put(toolSearchSpec());
         JSONObject localStatus = new JSONObject();
         localStatus.put("type", "status");
         StringBuilder statusText = new StringBuilder("核心工具 ").append(coreCount).append(" 个已加载");
-        statusText.append(shizukuReady ? "（Shizuku 就绪）" : "（Shizuku 未就绪，手机工具已跳过）");
-        statusText.append("；shell、Termux、文件、设置等按需 tool_search 发现");
-        if (termuxReady) {
-            statusText.append("；Termux 可用（搜索 shell 或 termux）");
-        } else {
-            statusText.append("；Termux 不可用");
-        }
-        if (!shizukuReady && !termuxReady) {
-            statusText.append("；没有任何本地执行能力，请提示用户到 设置 → Agent 配置 Shizuku 或 Termux");
-        }
+        statusText.append(accessibilityReady
+                ? "；无障碍已开启（读屏/截图可用）"
+                : "；无障碍未开启（读屏/截图不可用，需在系统设置 → 无障碍里开启 DLA）");
+        statusText.append(shizukuReady
+                ? "；Shizuku 已就绪（特权命令可用）"
+                : "；Shizuku 未就绪（pm/am/settings 不可用，不影响读屏/点击/命令）");
+        statusText.append("；").append(RuntimeTools.statusLine(context));
+        statusText.append("；文件、设置、剪贴板、zip、docx 与 Python/Node 脚本按需 tool_search 发现");
         localStatus.put("text", statusText.toString());
         emit(localStatus);
         // 官方联网：/v1/tools/search 与 /v1/tools/fetch
@@ -830,11 +872,12 @@ public final class AgentRunner {
         return new JSONObject()
                 .put("name", "tool_search")
                 .put("description",
-                        "搜索 DLA 的扩展工具目录。初始只加载核心手机操作（含截图与看图 phone_view_image）；"
-                                + "需要 shell、Termux 终端、文件、应用管理、设置、剪贴板、通知、zip、docx 等能力时先搜索"
-                                + "（shell 类关键词：shell/终端/命令/Termux/node/python；看图/图片关键词：图片/看图/image）。"
+                        "搜索 DLA 的扩展工具目录。核心工具（读屏/截图/点击/输入/看图/本机终端）已经在列表里；"
+                                + "需要文件读写、设置、剪贴板、通知、zip、docx，或 Python/Node 脚本时先搜索"
+                                + "（关键词示例：文件/目录/读取/写入、应用、设置、剪贴板、通知、zip、docx、"
+                                + "python/脚本、js/node、搜索/rg）。"
                                 + "返回匹配工具的说明和参数，下一轮这些工具会加入可用列表。"
-                                + "搜索不执行任何操作。")
+                                + "搜索不执行任何操作；搜不到就说明当前后端不可用，直接告诉用户缺什么。")
                 .put("input_schema", new JSONObject()
                         .put("type", "object")
                         .put("properties", properties)
@@ -889,9 +932,8 @@ public final class AgentRunner {
         }
         if (matches.isEmpty()) {
             return new McpClient.ToolResult(
-                    "没有匹配「" + query + "」的扩展工具。可试：shell、终端、Termux、文件、目录、读取、写入、替换、"
-                            + "应用、设置、剪贴板、通知、zip、docx、截图。"
-                            + "（若 Shizuku 或 Termux 都没就绪，扩展工具目录会是空的。）", false);
+                    "没有匹配「" + query + "」的扩展工具。可试：命令/终端、python、js、文件、目录、读取、写入、"
+                            + "替换、应用、设置、剪贴板、通知、zip、docx、截图。", false);
         }
         StringBuilder text = new StringBuilder("匹配 " + matches.size()
                 + " 个工具（已在下一轮加入可用列表）：\n");
@@ -961,6 +1003,7 @@ public final class AgentRunner {
                     + "具体工具以当前 tools 列表为准，不要臆造操作结果。\n";
         }
         StringBuilder builder = new StringBuilder(base);
+        builder.append("\n\n").append(TOOL_MAP);
         if (plan.length() > 0) {
             builder.append("\n\n【当前任务计划】\n");
             for (int i = 0; i < plan.length(); i++) {
@@ -1058,10 +1101,10 @@ public final class AgentRunner {
                     ? new JSONObject() : new JSONObject(call.arguments.toString());
             return executeToolSearch(arguments);
         }
-        if (TermuxTools.isTermux(call.name)) {
+        if (RuntimeTools.isRuntime(call.name)) {
             JSONObject arguments = call.arguments.length() == 0
                     ? new JSONObject() : new JSONObject(call.arguments.toString());
-            return TermuxTools.execute(context, arguments);
+            return RuntimeTools.execute(context, call.name, arguments);
         }
         if (TaskTools.isTask(call.name)) {
             JSONObject arguments = call.arguments.length() == 0
@@ -1393,3 +1436,4 @@ public final class AgentRunner {
         return text.length() <= limit ? text : text.substring(0, limit) + "\n…（已截断）";
     }
 }
+

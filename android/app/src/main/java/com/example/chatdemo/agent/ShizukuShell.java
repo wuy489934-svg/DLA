@@ -1,6 +1,8 @@
 package com.example.chatdemo.agent;
 
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -9,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 import rikka.shizuku.Shizuku;
+import rikka.shizuku.ShizukuProvider;
 
 /**
  * Shizuku 的 shell 后端：无需 root，用 shell(uid 2000) 执行命令。
@@ -18,11 +21,54 @@ import rikka.shizuku.Shizuku;
 public final class ShizukuShell {
 
     public static final int PERMISSION_REQUEST_CODE = 4101;
+    private static final String TAG = "DlaShizuku";
+
+    /** 应用 Context，用于在非 provider 进程里主动向主进程要 binder */
+    private static volatile Context appContext;
+    /** 上次要 binder 的时间，避免每次探测都跨进程调用 */
+    private static volatile long lastBinderRequest;
 
     private ShizukuShell() {}
 
+    public static void init(Context context) {
+        if (context != null) {
+            appContext = context.getApplicationContext();
+        }
+    }
+
+    /**
+     * 补取 binder。
+     *
+     * Shizuku 只会把 binder 送到声明了 ShizukuProvider 的进程（主进程）。
+     * Agent 跑在 :agent，如果不主动要一次，Shizuku.pingBinder() 永远是 false，
+     * 于是「Shizuku 已授权却显示未就绪」。这里做两件事：
+     * - 每次探测前若没有 binder，就向 provider 取一次（最快 2 秒一次）；
+     * - Shizuku 中途启动/重启后，下一次探测能自动接上，不需要重启 App。
+     */
+    private static void ensureBinder() {
+        try {
+            if (Shizuku.pingBinder()) {
+                return;
+            }
+            Context context = appContext;
+            if (context == null) {
+                return;
+            }
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - lastBinderRequest < 2000) {
+                return;
+            }
+            lastBinderRequest = now;
+            ShizukuProvider.requestBinderForNonProviderProcess(context);
+            Log.d(TAG, "requested binder, ping=" + Shizuku.pingBinder());
+        } catch (Throwable ignored) {
+            // 没有 Shizuku 或版本不支持，按不可用处理
+        }
+    }
+
     public static boolean running() {
         try {
+            ensureBinder();
             return Shizuku.pingBinder();
         } catch (Throwable error) {
             return false;

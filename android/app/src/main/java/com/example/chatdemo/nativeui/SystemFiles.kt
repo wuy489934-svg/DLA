@@ -7,9 +7,9 @@ import android.provider.DocumentsContract
 
 /**
  * 系统文件访问：通过 SAF 让用户授权一个文件夹（或存储根目录），
- * 再把这个文件夹下的文件**复制**到应用私有目录，交给 Agent 用 Termux 读取。
+ * 再把这个文件夹下的文件**复制**到应用私有目录，交给 Agent 用 phone_sh 读取。
  *
- * 为什么是复制而不是直接给 URI：Termux 里的 shell 只能读真实路径，
+ * 为什么是复制而不是直接给 URI：本机 shell 只能读真实路径，
  * 读不了 content:// 的授权 URI。复制一份是最稳的做法，也避免用户撤销授权后任务失败。
  */
 object SystemFiles {

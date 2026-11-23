@@ -23,7 +23,6 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.core.content.ContextCompat;
 
-import com.example.chatdemo.MainActivity;
 import com.example.chatdemo.R;
 
 import org.json.JSONObject;
@@ -95,7 +94,7 @@ public class AgentService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 context,
                 0,
-                new Intent(context, MainActivity.class),
+                new Intent(context, com.example.chatdemo.nativeui.NativeShellActivity.class),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
         );
         PendingIntent stopIntent = PendingIntent.getService(
@@ -297,3 +296,4 @@ public class AgentService extends Service {
         }
     }
 }
+

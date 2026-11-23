@@ -67,6 +67,8 @@ public final class LocalTools {
     private static volatile int screenWidth;
     private static volatile int screenHeight;
     private static final int DEFAULT_TIMEOUT = 20000;
+    /** 当前调用的 Context；run() 在没有 Shizuku 时要靠它跑 app 身份 shell */
+    private static volatile Context currentContext;
 
     private LocalTools() {}
 
@@ -292,7 +294,7 @@ public final class LocalTools {
         list.put(tool(
                 "phone_view_image",
                 "打开一张本机图片给你自己看（jpg/png/webp/gif，长边压到 1280 再回传）。"
-                        + "用户提到的图片、相册文件、termux 用 screencap 存的截图都可以用它读；"
+                        + "用户提到的图片、相册文件、用 screencap 存的截图都可以用它读；"
                         + "看完图再回答，不要凭文件名猜内容。",
                 schema(props("path", p("string", "图片绝对路径，例如 /sdcard/DCIM/Camera/a.jpg")), "path")
         ));
@@ -334,13 +336,15 @@ public final class LocalTools {
     }
 
     public static Result execute(Context context, String name, JSONObject args) {
+        currentContext = context;
         JSONObject arguments = args == null ? new JSONObject() : args;
         try {
             switch (name) {
                 case "phone_shell": {
                     String command = arguments.optString("command");
                     int timeout = arguments.optInt("timeout_ms", DEFAULT_TIMEOUT);
-                    return ok(run(command, Math.min(Math.max(timeout, 1000), 120000)));
+                    // 这个工具的名字就是「特权 shell」，不能悄悄退化成 app 身份
+                    return ok(ShizukuShell.exec(command, Math.min(Math.max(timeout, 1000), 120000)));
                 }
                 case "phone_screen": {
                     String fast = ChatDemoAccessibilityService.dumpScreen();
@@ -503,9 +507,17 @@ public final class LocalTools {
                     if (pkg.isEmpty()) {
                         return fail("package 不能为空");
                     }
-                    String out = run("am force-stop " + shq(pkg), 10000);
                     ChatDemoAccessibilityService.invalidateCache();
-                    return ok(out);
+                    if (ShizukuShell.running() && ShizukuShell.granted()) {
+                        return ok(run("am force-stop " + shq(pkg), 10000));
+                    }
+                    // 没有 Shizuku：只能结束该应用的后台进程，前台界面由系统决定
+                    android.app.ActivityManager manager = (android.app.ActivityManager)
+                            context.getSystemService(Context.ACTIVITY_SERVICE);
+                    if (manager != null) {
+                        manager.killBackgroundProcesses(pkg);
+                    }
+                    return ok("已请求结束后台进程（没有 Shizuku，只能杀后台；前台界面可能仍在）");
                 }
                 case "phone_files": {
                     String path = arguments.optString("path", "/sdcard").trim();
@@ -761,8 +773,34 @@ public final class LocalTools {
         }
     }
 
+    /**
+     * 执行一条需要 shell 的命令。
+     *
+     * 有 Shizuku 就用 uid 2000 的 shell（pm/am/settings 都能跑）；没有 Shizuku 时
+     * 退回内置的 app 身份 shell——grep/stat/unzip/cat 这类文件文本命令照常可用，
+     * pm/am/settings 会失败，由调用方转成明确错误或降级处理。
+     */
     private static String run(String command, int timeoutMs) throws Exception {
-        String text = ShizukuShell.exec(command, timeoutMs);
+        String text;
+        if (ShizukuShell.running() && ShizukuShell.granted()) {
+            text = ShizukuShell.exec(command, timeoutMs);
+        } else {
+            Context context = currentContext;
+            if (context == null) {
+                throw new IOException("没有可用的 shell 后端");
+            }
+            ProcessRunner.Result result = NativeShell.runRaw(context, command, timeoutMs);
+            if (result.timedOut) {
+                throw new IOException("命令超时（" + timeoutMs + "ms）");
+            }
+            if (result.exit != 0) {
+                String detail = result.stderr == null ? "" : result.stderr.trim();
+                throw new IOException(detail.isEmpty()
+                        ? "命令失败（exit " + result.exit + "）"
+                        : "命令失败（exit " + result.exit + "）：" + detail);
+            }
+            text = result.stdout;
+        }
         return text == null ? "" : text.trim();
     }
 
@@ -886,7 +924,7 @@ public final class LocalTools {
             return fail("文件是空的：" + path);
         }
         if (size > 32L * 1024 * 1024) {
-            return fail("图片太大（" + (size / 1024 / 1024) + "MB）。先用 termux 压到 32MB 以内再读。");
+            return fail("图片太大（" + (size / 1024 / 1024) + "MB）。先用 phone_sh 里的工具压到 32MB 以内再读。");
         }
         try {
             BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -1399,3 +1437,4 @@ public final class LocalTools {
         return new Result("错误：" + message, true);
     }
 }
+

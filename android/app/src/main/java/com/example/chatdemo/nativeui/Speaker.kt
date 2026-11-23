@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +45,13 @@ object Speaker {
 
     private var engine: TextToSpeech? = null
     private var voices: List<TtsVoice> = emptyList()
+    /** 引擎还在初始化时用户就点了朗读：先记下来，就绪后立刻念 */
+    private var pendingSpeak: Pair<String, (() -> Unit)?>? = null
+    /** 当前这条朗读结束（正常/出错/被停止）时回调，用来复位 UI 的喇叭状态 */
+    private var speakDone: (() -> Unit)? = null
+    /** 每条朗读用独立 utteranceId：QUEUE_FLUSH 停掉的旧语句不会误触新语句的完成回调 */
+    private var utteranceSeq = 0L
+    private var currentUtterance: String? = null
     private var engineVoices: Map<String, Voice> = emptyMap()
     private var session = 0L
 
@@ -129,30 +137,66 @@ object Speaker {
         return false
     }
 
+    /**
+     * 点一下喇叭就开始朗读：引擎没就绪时先排队，就绪后自动念；
+     * 引擎不可用时不会卡住 UI。
+     */
+    fun speakWhenReady(context: Context, text: String, onDone: (() -> Unit)? = null) {
+        if (text.isBlank()) return
+        ensure(context)
+        val state = synchronized(lock) { _state.value }
+        when (state) {
+            is TtsState.Ready -> postSpeak(text, onDone)
+            is TtsState.Unavailable -> {
+                Log.w(TAG, "speak skipped: ${state.reason}")
+                onDone?.invoke()
+            }
+            else -> synchronized(lock) { pendingSpeak = text to onDone }
+        }
+    }
+
     // TextToSpeech.speak 只在主线程调用；Compose 与 ChatEngine 的回调都会落到主线程。
     fun speak(text: String) {
         if (text.isBlank()) return
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            Log.w(TAG, "speak ignored: must be called on the main thread")
+        postSpeak(text, null)
+    }
+
+    private fun postSpeak(text: String, onDone: (() -> Unit)?) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            doSpeak(text, onDone)
+        } else {
+            mainHandler.post { doSpeak(text, onDone) }
+        }
+    }
+
+    private fun doSpeak(text: String, onDone: (() -> Unit)?) {
+        val tts = synchronized(lock) {
+            if (_state.value is TtsState.Ready) engine else null
+        } ?: run {
+            onDone?.invoke()
             return
         }
-
-        val engine = synchronized(lock) {
-            if (_state.value is TtsState.Ready) engine else null
-        } ?: return
-
+        speakDone = onDone
+        utteranceSeq += 1
+        val utteranceId = "dla-" + utteranceSeq
+        currentUtterance = utteranceId
         try {
-            val result = engine.speak(
+            val result = tts.speak(
                 text.take(MAX_SPEAK_CHARS),
                 TextToSpeech.QUEUE_FLUSH,
                 null,
-                "dla-reply",
+                utteranceId,
             )
             if (result != TextToSpeech.SUCCESS) {
                 Log.w(TAG, "speak returned $result")
+                speakDone = null
+                currentUtterance = null
+                onDone?.invoke()
             }
         } catch (t: Exception) {
             Log.e(TAG, "speak failed", t)
+            speakDone = null
+            onDone?.invoke()
         }
     }
 
@@ -162,6 +206,11 @@ object Speaker {
             engine?.stop()
         } catch (t: Exception) {
             Log.w(TAG, "stop failed", t)
+        }
+        synchronized(lock) {
+            pendingSpeak = null
+            speakDone = null
+            currentUtterance = null
         }
     }
 
@@ -177,6 +226,32 @@ object Speaker {
         }
         releaseEngine(engine)
         Log.d(TAG, "shutdown")
+    }
+
+    private val progressListener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) = Unit
+
+        override fun onDone(utteranceId: String?) {
+            mainHandler.post {
+                val callback = synchronized(lock) {
+                    if (utteranceId == null || utteranceId != currentUtterance) {
+                        return@post
+                    }
+                    currentUtterance = null
+                    val current = speakDone
+                    speakDone = null
+                    current
+                }
+                callback?.invoke()
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) = onDone(utteranceId)
+
+        override fun onError(utteranceId: String?, errorCode: Int) = onDone(utteranceId)
+
+        override fun onStop(utteranceId: String?, interrupted: Boolean) = onDone(utteranceId)
     }
 
     private fun startEngine(token: Long, app: Context) {
@@ -244,6 +319,15 @@ object Speaker {
             releaseEngine(release)
         } else if (ready) {
             Log.d(TAG, "ready, voices=${prepared.voices.size}")
+            runCatching { tts.setOnUtteranceProgressListener(progressListener) }
+            val queued = synchronized(lock) {
+                val item = pendingSpeak
+                pendingSpeak = null
+                item
+            }
+            if (queued != null) {
+                postSpeak(queued.first, queued.second)
+            }
         }
     }
 

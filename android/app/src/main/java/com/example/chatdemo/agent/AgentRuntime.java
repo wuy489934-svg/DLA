@@ -66,19 +66,8 @@ public final class AgentRuntime {
                 emitNow(id, errorEvent("Agent 正在运行，请先停止当前任务"));
                 return;
             }
-            // 准入：Shizuku 与 Termux 任一可用即可对话；两者都缺才拦下并给出两条开启路径。
-            boolean shizukuReady = ShizukuShell.running() && ShizukuShell.granted();
-            boolean termuxReady = TermuxBridge.isInstalled(context)
-                    && context.checkSelfPermission("com.termux.permission.RUN_COMMAND")
-                    == PackageManager.PERMISSION_GRANTED;
-            if (!shizukuReady && !termuxReady) {
-                emitNow(id, errorEvent(
-                        "Agent 需要 Shizuku 或 Termux 至少一项可用。请到 设置 → Agent："
-                                + "授权「手机能力（Shizuku）」，或配好「Termux 环境」"
-                                + "（在 Termux 开启 allow-external-apps 并授予 DLA RUN_COMMAND 权限）后重试"
-                ));
-                return;
-            }
+            // 不再有准入拦截：本机终端 phone_sh 是内置的（应用身份 /system/bin/sh），
+            // 任何手机装完就能跑 Agent；Shizuku 只决定「特权命令」那部分能不能用。
             running = true;
             cancelled = false;
             preserveCheckpoint = false;

@@ -126,16 +126,16 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 原生壳（方案 B 完成态）：会话、发送、Agent 审批、Markdown 渲染、设置。
+ * 原生 Compose 界面（唯一入口）：会话、发送、Agent 审批、Markdown 渲染、设置。
  *
  * WebView 只作为「隔离的 Markdown 渲染器」存在（见 Markdown.kt），
- * 网页界面降级为可选外壳，从设置里进入。
+ * 没有任何网页应用入口。
  */
 class NativeShellActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 网页界面会抢走 Agent 监听器，回到原生必须重新挂上
+        // 回到前台重新挂上 Agent 监听器（系统恢复任务时也能收到事件）
         ChatEngine.attachListener()
     }
 
@@ -146,8 +146,7 @@ class NativeShellActivity : ComponentActivity() {
         Lang.init(this)
         enableEdgeToEdge()
         ChatEngine.attach(this)
-        // 一次性把网页留下的 API Key 迁到原生设置，用户不需要重填
-        KeyMigration.migrateOnce(this) { }
+
         setContent {
             var themeMode by remember { mutableStateOf(ChatEngine.themeMode) }
             val dark = when (themeMode) {
@@ -164,12 +163,6 @@ class NativeShellActivity : ComponentActivity() {
             }
             DlaTheme(themeMode) {
                 NativeApp(
-                    onOpenWeb = {
-                        startActivity(
-                            Intent(this, Class.forName("com.example.chatdemo.MainActivity"))
-                                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                        )
-                    },
                     themeMode = themeMode,
                     onThemeMode = {
                         themeMode = it
@@ -217,7 +210,6 @@ private val ScreenSaver: Saver<Screen, String> = Saver(
 
 @Composable
 private fun NativeApp(
-    onOpenWeb: () -> Unit,
     themeMode: String,
     onThemeMode: (String) -> Unit,
 ) {
@@ -258,14 +250,12 @@ private fun NativeApp(
             )
             is Screen.Settings -> SettingsScreen(
                 onBack = { screen = Screen.List },
-                onOpenWeb = onOpenWeb,
                 onAdvanced = { screen = Screen.Advanced },
                 themeMode = themeMode,
                 onThemeMode = onThemeMode,
             )
             is Screen.Advanced -> AdvancedSettingsScreen(
                 onBack = { screen = Screen.Settings },
-                onOpenWeb = onOpenWeb,
             )
         }
     }
@@ -733,6 +723,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                             )
                             is ChatRow.BlockRow -> BlockRowView(
                                 row.block,
+                                messageId = row.message.id,
                                 onCopy = { copyTarget = it },
                             )
                         }
@@ -921,6 +912,33 @@ private fun CopyChip(text: String) {
     }
 }
 
+/**
+ * 朗读：点一下开始念这条正文，再点一下停止。
+ *
+ * 引擎没就绪时 Speaker 会先把文字排队，就绪后自动念；不可用时会在设置里给出原因。
+ */
+@Composable
+private fun SpeakChip(id: String, text: String) {
+    if (text.isBlank()) return
+    val speaking by ChatEngine.speaking.collectAsState()
+    val active = speaking == id
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { ChatEngine.toggleSpeak(id, text) }
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(if (active) "■" else "🔊", color = if (active) DlaColors.Mint else DlaColors.TextDim, fontSize = 11.sp)
+        Spacer(Modifier.width(4.dp))
+        Text(
+            if (active) Lang.t("停止") else Lang.t("朗读"),
+            color = if (active) DlaColors.Mint else DlaColors.TextDim,
+            fontSize = 10.sp,
+        )
+    }
+}
+
 private fun copyToClipboard(context: Context, text: String) {
     runCatching {
         val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -1015,7 +1033,7 @@ private fun UserMessageRow(
 }
 
 @Composable
-private fun BlockRowView(block: Block, onCopy: (String) -> Unit) {
+private fun BlockRowView(block: Block, messageId: String, onCopy: (String) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -1040,7 +1058,11 @@ private fun BlockRowView(block: Block, onCopy: (String) -> Unit) {
                         NativeMarkdown(block.text)
                     }
                     if (block.text.isNotBlank()) {
-                        CopyChip(block.text)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CopyChip(block.text)
+                            Spacer(Modifier.width(2.dp))
+                            SpeakChip("$messageId#${block.text.hashCode()}", block.text)
+                        }
                     }
                 }
             }
@@ -1268,6 +1290,7 @@ private fun ToggleChip(label: String, active: Boolean, onToggle: () -> Unit) {
 
 @Composable
 private fun ConversationSettings() {
+    val context = LocalContext.current
     var thinking by remember { mutableStateOf(ChatEngine.thinking) }
     var search by remember { mutableStateOf(ChatEngine.search) }
     var autoApprove by remember { mutableStateOf(ChatEngine.autoApprove) }
@@ -1285,6 +1308,7 @@ private fun ConversationSettings() {
             ChatEngine.soundEnabled = it
             if (it) SoundFeedback.send()
         }
+        TtsSettings()
         var location by remember { mutableStateOf(ChatEngine.location) }
         OutlinedTextField(
             value = location,
@@ -1316,7 +1340,7 @@ private fun ThemeChip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+internal fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1348,62 +1372,306 @@ private fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -
 @Composable
 private fun PersonaSettings() {
     val context = LocalContext.current
-    var persona by remember { mutableStateOf(ChatEngine.persona) }
+    val scope = rememberCoroutineScope()
+    var profile by remember { mutableStateOf(ChatEngine.personaProfile) }
     var mirror by remember { mutableStateOf(ChatEngine.mirrorMode) }
     var hasImage by remember { mutableStateOf(ChatEngine.personaImage != null) }
-    // 开源版不内置人设资产：资产缺失时开关仍可用，但标签与注释要说明「未内置人设」
-    val builtInPersona = remember { MirrorPersona.hasBuiltIn(context) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    var loading by remember { mutableStateOf<ChatEngine.PersonaDraftMode?>(null) }
+    var pending by remember { mutableStateOf<ChatEngine.PersonaDraft?>(null) }
+    var pendingMode by remember { mutableStateOf<ChatEngine.PersonaDraftMode?>(null) }
+    var pendingImage by remember { mutableStateOf<String?>(null) }
+    var hint by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var expanded by remember { mutableStateOf(setOf("核心身份")) }
+    var confirmClear by remember { mutableStateOf(false) }
+
+    fun save(next: PersonaProfile = profile) {
+        ChatEngine.personaProfile = next
+        profile = next
+    }
+
+    val portraitPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            runCatching {
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@runCatching
-                val mime = context.contentResolver.getType(uri) ?: "image/png"
-                val data = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                ChatEngine.personaImage = "data:$mime;base64,$data"
+            val data = Attachments.dataUrl(context, uri)
+            if (data != null) {
+                ChatEngine.personaImage = data
                 hasImage = true
+                hint = Lang.t("立绘已保存；它会让 AI 对角色的把握更强")
+            } else {
+                error = Lang.t("没有读到图片")
             }
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(Lang.t("人设（仅 LLM 区）"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        OutlinedTextField(
-            value = persona,
-            onValueChange = { persona = it },
-            label = { Text(Lang.t("系统提示词（留空用内置身份）")) },
-            minLines = 4,
-            maxLines = 8,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            TextButton(onClick = { ChatEngine.persona = persona }) { Text(Lang.t("保存人设"), color = DlaColors.Mint) }
-            TextButton(onClick = { picker.launch("image/*") }) {
-                Text(if (hasImage) Lang.t("更换立绘") else Lang.t("上传立绘"), color = DlaColors.Warm)
-            }
-            if (hasImage) {
-                TextButton(onClick = { ChatEngine.personaImage = null; hasImage = false }) {
-                    Text(Lang.t("移除"), color = DlaColors.TextDim)
+
+    val analysisPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val data = Attachments.dataUrl(context, uri)
+            if (data == null) {
+                error = Lang.t("没有读到图片")
+            } else {
+                pendingImage = data
+                error = null
+                hint = null
+                loading = ChatEngine.PersonaDraftMode.IMAGE
+                scope.launch {
+                    val result = ChatEngine.draftPersona(ChatEngine.PersonaDraftMode.IMAGE, data)
+                    loading = null
+                    result.onSuccess { draft ->
+                        pending = draft
+                        pendingMode = ChatEngine.PersonaDraftMode.IMAGE
+                    }.onFailure { failure ->
+                        error = failure.message ?: Lang.t("图片分析失败")
+                    }
                 }
             }
         }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(Lang.t("角色设定（仅 LLM 区）"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            Lang.t("分层填写更容易稳定。文字写得越具体，角色越不容易跑偏；上传一张立绘后 AI 对角色的把握最强，不传图也能只靠文字。"),
+            color = DlaColors.TextDim,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+
+        PersonaProfile.GROUPS.forEach { group ->
+            val open = expanded.contains(group.title)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(DlaColors.Surface),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            expanded = if (open) expanded - group.title else expanded + group.title
+                        }
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        group.title,
+                        color = DlaColors.Text,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        if (open) Lang.t("收起") else Lang.t("展开"),
+                        color = DlaColors.TextDim,
+                        fontSize = 11.sp,
+                    )
+                }
+                if (open) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        group.fields.forEach { field ->
+                            OutlinedTextField(
+                                value = profile.value(field.key),
+                                onValueChange = { text -> profile = profile.with(field.key, text) },
+                                label = {
+                                    Text(
+                                        if (field.key == "boundaries") {
+                                            Lang.t("边界与底线（必须遵守）")
+                                        } else {
+                                            field.label
+                                        },
+                                    )
+                                },
+                                minLines = field.minLines,
+                                maxLines = 6,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = {
+                save()
+                hint = Lang.t("已保存角色设定")
+                error = null
+            }) { Text(Lang.t("保存设定"), color = DlaColors.Mint) }
+            TextButton(
+                onClick = {
+                    error = null
+                    hint = null
+                    loading = ChatEngine.PersonaDraftMode.FILL
+                    scope.launch {
+                        val result = ChatEngine.draftPersona(ChatEngine.PersonaDraftMode.FILL)
+                        loading = null
+                        result.onSuccess { draft ->
+                            pending = draft
+                            pendingMode = ChatEngine.PersonaDraftMode.FILL
+                        }.onFailure { failure ->
+                            error = failure.message ?: Lang.t("补全失败")
+                        }
+                    }
+                },
+                enabled = loading == null,
+            ) {
+                Text(
+                    if (loading == ChatEngine.PersonaDraftMode.FILL) Lang.t("补全中…") else Lang.t("AI 补全设定"),
+                    color = DlaColors.Warm,
+                )
+            }
+            TextButton(onClick = { confirmClear = true }) {
+                Text(Lang.t("清空"), color = DlaColors.TextDim)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = { analysisPicker.launch("image/*") },
+                enabled = loading == null,
+            ) {
+                Text(
+                    if (loading == ChatEngine.PersonaDraftMode.IMAGE) Lang.t("分析中…") else Lang.t("上传图片分析"),
+                    color = DlaColors.Warm,
+                )
+            }
+            TextButton(onClick = { portraitPicker.launch("image/*") }) {
+                Text(if (hasImage) Lang.t("更换立绘") else Lang.t("上传立绘"), color = DlaColors.Mint)
+            }
+            if (hasImage) {
+                TextButton(onClick = {
+                    ChatEngine.personaImage = null
+                    hasImage = false
+                }) { Text(Lang.t("移除立绘"), color = DlaColors.TextDim) }
+            }
+        }
+        Text(
+            Lang.t("上传立绘后，它会作为「你的样子」注入给她；如果图片和文字设定冲突，以文字为准。"),
+            color = DlaColors.TextDim,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+        if (loading != null) {
+            Text(
+                Lang.t("正在让 AI 先考虑情感需求、事实定义与用户安全，再动笔…"),
+                color = DlaColors.TextDim,
+                fontSize = 11.sp,
+            )
+        }
+        error?.let { Text(it, color = DlaColors.Error, fontSize = 11.sp, lineHeight = 16.sp) }
+        hint?.let { Text(it, color = DlaColors.Mint, fontSize = 11.sp, lineHeight = 16.sp) }
+
+        val builtInPersona = remember { MirrorPersona.hasBuiltIn(context) }
         SettingSwitch(
-            if (builtInPersona) {
-                Lang.t("镜子模式（内置人设 + 立绘）")
-            } else {
-                Lang.t("镜子模式（未内置人设）")
-            },
+            if (builtInPersona) Lang.t("镜子模式（内置人设 + 立绘）") else Lang.t("镜子模式（未内置人设）"),
             mirror,
         ) {
             mirror = it
             ChatEngine.mirrorMode = it
         }
         Text(
-            if (builtInPersona) {
-                Lang.t("人设与立绘只在 LLM 区生效；开启镜子模式会覆盖自定义人设。")
+            if (mirror) {
+                Lang.t("镜子模式生效时会覆盖上面的自定义设定，改用内置人设。")
             } else {
-                Lang.t("开源版不内置人设与立绘：镜子模式开关保留，但需要自行放入 assets/mirror_persona.txt 与 assets/mirror_portrait.webp 才会生效。")
+                Lang.t("人设与立绘只在 LLM 区生效；开启镜子模式会覆盖自定义设定。")
             },
             color = DlaColors.TextDim,
             fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text(Lang.t("清空角色设定？")) },
+            text = { Text(Lang.t("会清空所有分层设定（立绘不受影响），用于重新开始。")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    save(PersonaProfile())
+                    confirmClear = false
+                    error = null
+                    hint = Lang.t("已清空角色设定")
+                }) { Text(Lang.t("清空"), color = DlaColors.Error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text(Lang.t("取消")) }
+            },
+        )
+    }
+
+    val draft = pending
+    if (draft != null) {
+        val (merged, written) = profile.mergeMissing(draft.profile)
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = {
+                Text(
+                    if (pendingMode == ChatEngine.PersonaDraftMode.IMAGE) {
+                        Lang.t("图片分析结果")
+                    } else {
+                        Lang.t("AI 补全结果")
+                    },
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (written.isEmpty()) {
+                        Text(
+                            Lang.t("没有空缺字段可补全；已有设定不会被覆盖。"),
+                            color = DlaColors.TextDim,
+                            fontSize = 12.sp,
+                        )
+                    } else {
+                        Text(
+                            Lang.t("只会补写下面这些为空的字段，已有内容不动："),
+                            color = DlaColors.TextDim,
+                            fontSize = 11.sp,
+                        )
+                        written.forEach { field ->
+                            Text(
+                                field.label,
+                                color = DlaColors.Mint,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(draft.profile.value(field.key), color = DlaColors.Text, fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (written.isNotEmpty()) {
+                    TextButton(onClick = {
+                        save(merged)
+                        pending = null
+                        hint = Lang.t("已补全 %d 项设定", written.size)
+                    }) { Text(Lang.t("应用到设定"), color = DlaColors.Mint) }
+                }
+            },
+            dismissButton = {
+                Row {
+                    if (pendingMode == ChatEngine.PersonaDraftMode.IMAGE && pendingImage != null) {
+                        TextButton(onClick = {
+                            save(merged)
+                            ChatEngine.personaImage = pendingImage
+                            hasImage = true
+                            pending = null
+                            hint = Lang.t("已应用，并把这张图设为立绘")
+                        }) { Text(Lang.t("应用并设为立绘"), color = DlaColors.Warm) }
+                    }
+                    TextButton(onClick = { pending = null }) { Text(Lang.t("取消")) }
+                }
+            },
         )
     }
 }
@@ -1561,7 +1829,6 @@ private fun Modifier.navigationBarsPaddingCompat(): Modifier =
 @Composable
 private fun SettingsScreen(
     onBack: () -> Unit,
-    onOpenWeb: () -> Unit,
     onAdvanced: () -> Unit,
     themeMode: String,
     onThemeMode: (String) -> Unit,
@@ -1659,14 +1926,6 @@ private fun SettingsScreen(
                 )
             }
 
-            HorizontalDivider(color = DlaColors.Line)
-            Text(Lang.t("界面"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                Lang.t("当前使用原生界面。网页界面保留为兼容外壳，随时可以打开。"),
-                color = DlaColors.TextDim,
-                fontSize = 12.sp,
-            )
-            TextButton(onClick = onOpenWeb) { Text(Lang.t("打开网页界面"), color = DlaColors.Warm) }
 
             HorizontalDivider(color = DlaColors.Line)
             Text(Lang.t("主题"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -1695,7 +1954,7 @@ private fun SettingsScreen(
 
             HorizontalDivider(color = DlaColors.Line)
             Text(Lang.t("更多"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onAdvanced) { Text(Lang.t("MCP / Termux / 数据管理"), color = DlaColors.Mint) }
+            TextButton(onClick = onAdvanced) { Text(Lang.t("运行环境 / MCP / 数据"), color = DlaColors.Mint) }
 
             HorizontalDivider(color = DlaColors.Line)
             Text(
@@ -1785,3 +2044,4 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     is ContextWrapper -> baseContext.findActivity()
     else -> null
 }
+

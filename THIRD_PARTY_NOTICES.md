@@ -28,6 +28,12 @@ report) and attach it to the release.
 | KaTeX 0.16.11 (bundled) | MIT | `assets/renderer/`, offline math, fonts under OFL |
 | mermaid 10.9.1 (bundled) | MIT | `assets/renderer/`, offline diagrams |
 
+| Node.js 24.22.1 (`libnode.so`, `libdshnode.so`) | MIT | arm64 build from DSH-Android prebuilts (Apache-2.0) |
+| ripgrep 15.2.0 (`librg.so`) | MIT / Unlicense | arm64 build from DSH-Android prebuilts (Apache-2.0) |
+| CPython 3.12 (Chaquopy runtime) | PSF-2.0 | loaded through Chaquopy (MIT) |
+| Chaquopy 17.2.0 | MIT | Python runtime and Gradle plugin |
+| Android toybox (`/system/bin/sh`) | 0BSD | shipped by the device, not bundled |
+
 ## Assets
 
 The repository intentionally contains **no** third-party character artwork.

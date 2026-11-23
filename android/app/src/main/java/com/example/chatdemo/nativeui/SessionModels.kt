@@ -63,7 +63,7 @@ data class Attachment(
     val name: String? = null,
     val dataUrl: String? = null,
     val text: String? = null,
-    /** Agent 区：原文件已复制到应用私有目录，这里存绝对路径，供 Termux 读取/转换 */
+    /** Agent 区：原文件已复制到应用私有目录，这里存绝对路径，供 phone_sh 读取/转换 */
     val localPath: String? = null,
     val sizeBytes: Long = 0L,
 )

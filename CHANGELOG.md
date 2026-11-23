@@ -1,5 +1,53 @@
 # Changelog
 
+## 2.5
+
+- **Read replies aloud, with your own voice provider.** TTS is back with a switch,
+  a per-message read-aloud chip and auto-read on reply. The default is the device's
+  system speech engine; users can also add any OpenAI-compatible cloud TTS
+  (`POST {baseUrl}/audio/speech`) with its own API key, model, voice, format and
+  speed, switch between providers, preview, edit and delete them. Keys stay on the
+  device.
+- **Layered character settings (2.3).** The single persona textarea is now ten
+  fields in five groups (core identity, personality & expression, relationship &
+  background, boundaries, extra), stored as JSON; the old single-block persona is
+  migrated into “extra” without losing a character.
+- **AI completion and picture analysis (2.3).** “AI complete settings” asks the
+  model to reason through emotional needs, factual consistency and user safety
+  before writing, then fills **only empty fields** with a preview dialog. “Analyze a
+  picture” sends a compressed portrait, fills appearance/identity/personality and
+  can set the picture as the portrait in one step.
+- **Text beats pictures (2.3).** The persona block declares the text as the only
+  authority; the injected portrait comes with the textual appearance next to it, so
+  a conflicting image cannot rewrite the character’s looks.
+
+## 2.3
+
+- (included above: layered persona, AI completion, picture analysis, text priority)
+
+## 2.2
+
+- **Termux is gone; the runtimes live in the APK.** The app now ships Android's own
+  shell (toybox: awk / sed / grep / find / tar / unzip / sha256sum / timeout / nc …),
+  CPython 3.12 through Chaquopy, Node.js 24 (libnode + launcher) and ripgrep.
+  Commands run as the app identity; only `pm` / `am` / `settings` still need Shizuku.
+  Four setup steps disappear: install Termux, `allow-external-apps`, MIUI foregrounding,
+  and the RUN_COMMAND grant. The “Shizuku or Termux” admission gate is deleted — the
+  Agent works on a bare install.
+- **The web shell is gone.** `MainActivity`, the WebView host bridge, `KeyMigration`
+  and the 4.3 MB `assets/public` bundle are removed; the native Compose UI is the only
+  entry. The only remaining WebView is the isolated, offline Markdown renderer.
+- **New agent tools.** `phone_sh` (core, app-uid shell), `phone_py` (Chaquopy,
+  `sys.settrace` deadline so runaway loops get interrupted) and `phone_js`
+  (Node child process). All three are approval-gated and truncated at 32 KB per stream.
+- **Stopping really stops.** Commands start under `setsid`, write their pid, and are
+  killed by process group *and* session on stop/timeout, so backgrounded scripts
+  (`nohup … &`) die with the run.
+- **Arm64 only.** Python 3.12+ and the prebuilt Node/ripgrep binaries are 64-bit;
+  `abiFilters` is `arm64-v8a`. APK ≈ 48 MB (≈ 150 MB installed, mostly V8).
+- **Settings.** The Termux panel is replaced by “运行环境”: Android/toybox version,
+  Python, Node, ripgrep, working directory, and a self-check that runs one real command.
+
 ## 2.1
 
 - **Copy is back, without turning the screen into a text field.** Long-press a user

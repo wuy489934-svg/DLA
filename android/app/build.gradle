@@ -1,21 +1,11 @@
-// 原生壳的构建配置：在原有 AGP 之外加入 Kotlin 与 Compose。
-// 说明：Java 代码与 Kotlin 代码共用 src/main/java 目录，包名不变。
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
     id 'org.jetbrains.kotlin.plugin.compose'
+    id 'com.chaquo.python'
 }
 
-// 网页产物由 web/ 构建；CI 里先 pnpm build，再执行 assembleRelease
-def webDist = file('../../web/dist')
-
-def syncWebAssets = tasks.register('syncWebAssets', Sync) {
-    from webDist
-    into layout.projectDirectory.dir('src/main/assets/public')
-    onlyIf { webDist.isDirectory() }
-}
-
-// release 签名：keystore.properties 存在时才启用；不要把密钥提交到仓库
+// release 签名：keystore.properties 存在时才启用，方便没有密钥的环境只跑 debug
 def keystorePropsFile = rootProject.file('../keystore/keystore.properties')
 def hasReleaseKey = keystorePropsFile.exists()
 def keystoreProps = new Properties()
@@ -23,17 +13,36 @@ if (hasReleaseKey) {
     keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
 
+def dlaVersionCode = (findProperty('dlaVersionCode') ?: '35').toString().toInteger()
+def dlaVersionName = (findProperty('dlaVersionName') ?: '1.4.0').toString()
+
+// Python 运行时（Chaquopy）：构建机上的 Python 必须与 chaquopy.version 的主次版本一致。
+// 本机默认用 DSH 自带的 3.12；可用 -PdlaBuildPython=… / -PdlaPythonVersion=… 覆盖。
+def dlaPythonVersion = (findProperty('dlaPythonVersion') ?: '3.12').toString()
+// 构建机上的 Python（只用于编译 pyc / 打包依赖）；不传则交给 Chaquopy 自己探测。
+// 本机示例：-PdlaBuildPython=C:/path/to/python.exe
+def dlaBuildPython = (findProperty('dlaBuildPython') ?: System.getenv('DLA_BUILD_PYTHON') ?: '').toString()
+
 android {
     namespace 'com.example.chatdemo'
     compileSdk 36
 
     defaultConfig {
-        applicationId 'io.github.dla.agent'
+        applicationId (findProperty('appId') ?: 'com.example.chatdemo').toString()
         minSdk 29
         targetSdk 36
-        versionCode 37
-        versionName '2.1'
+        versionCode dlaVersionCode
+        versionName dlaVersionName
+
+        // 内置运行时只有 arm64 版本（Node 24 / ripgrep / Python 3.12+），
+        // 不再打包 32 位库，APK 只发 arm64-v8a。
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
     }
+
+    def debugKeystore = file(System.getProperty('user.home') + '/.android/debug.keystore')
+    def perfSign = findProperty('perfSign') == 'true' && debugKeystore.exists()
 
     signingConfigs {
         if (hasReleaseKey) {
@@ -44,6 +53,15 @@ android {
                 keyPassword keystoreProps['keyPassword']
             }
         }
+        if (perfSign) {
+            // 仅性能验收包：复用手机上已安装包的 Android Debug 证书，保证 adb install -r 与数据保留
+            existingDebug {
+                storeFile debugKeystore
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
     }
 
     buildTypes {
@@ -52,7 +70,9 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (hasReleaseKey) {
+            if (perfSign) {
+                signingConfig signingConfigs.existingDebug
+            } else if (hasReleaseKey) {
                 signingConfig signingConfigs.release
             }
         }
@@ -76,29 +96,33 @@ android {
         resources {
             excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*']
         }
+        // 内置的 node / ripgrep 需要在 nativeLibraryDir 里被 exec，
+        // 只有 extractNativeLibs=true 才会把 lib/*.so 解压到那里。
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
+}
 
-    // 首屏资源免 inflate，直接 mmap；APK 会变大，这是预期
-    androidResources {
-        noCompress += ['js', 'css', 'html', 'svg', 'woff', 'woff2', 'ttf', 'json']
+chaquopy {
+    defaultConfig {
+        version = dlaPythonVersion
+        if (!dlaBuildPython.isEmpty()) {
+            buildPython dlaBuildPython
+        }
     }
 }
 
 dependencies {
     implementation 'androidx.core:core:1.13.1'
-    implementation 'androidx.webkit:webkit:1.12.1'
-    // Shizuku：免 root 的 shell 后端
+    // Shizuku：免 root 的 shell 后端（uid 2000），用于 pm/am/settings 这类特权命令
     implementation 'dev.rikka.shizuku:api:13.1.5'
     implementation 'dev.rikka.shizuku:provider:13.1.5'
 
-    // 原生 UI（混合方案 B）：Compose 外壳
+    // 原生 UI：Compose 外壳（唯一界面）
     implementation platform('androidx.compose:compose-bom:2024.09.03')
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.foundation:foundation'
     implementation 'androidx.compose.material3:material3'
     implementation 'androidx.activity:activity-compose:1.9.2'
-}
-
-tasks.named('preBuild').configure {
-    dependsOn syncWebAssets
 }

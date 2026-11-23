@@ -29,7 +29,7 @@ object Documents {
     const val KIND_IMAGE = "image"
     const val KIND_TEXT = "text"
 
-    /** Agent 区：把原文件复制到应用私有目录，返回路径与大小，供 Termux 直接读取 */
+    /** Agent 区：把原文件复制到应用私有目录，返回路径与大小，供 phone_sh 直接读取 */
     fun copyForAgent(context: Context, uri: Uri, name: String): Pair<String, Long>? = runCatching {
         copyForAgent(context, name) { context.contentResolver.openInputStream(uri) }
     }.getOrNull()
@@ -101,7 +101,7 @@ object Documents {
                 }.getOrNull()
                 val blocks = textBlock(name, text).toMutableList()
                 if (forAgent) {
-                    // 文本类也留一份原文件，方便 Termux 里用 grep/awk 等工具
+                    // 文本类也留一份原文件，方便 phone_sh 里用 grep/awk 等工具
                     copyForAgent(context, uri, name)?.let {
                         blocks += Attachment(kind = "file", name = name, localPath = it.first, sizeBytes = it.second)
                     }
@@ -109,7 +109,7 @@ object Documents {
                 blocks
             }
 
-            // Agent 区：其余格式一律落到私有目录，由 Termux 侧的 pdftotext/unzip/python 等处理
+            // Agent 区：其余格式一律落到私有目录，由 phone_sh / phone_py 侧的 unzip 等处理
             forAgent -> copyForAgent(context, uri, name)?.let {
                 listOf(Attachment(kind = "file", name = name, localPath = it.first, sizeBytes = it.second))
             } ?: emptyList()
@@ -124,7 +124,7 @@ object Documents {
      * 本地文件版提取（📂 文件浏览器）：不再依赖 content://，按真实路径直接读。
      *
      * 规则与 [extract] 一致：图片压成 data URL；PDF 渲页图；docx 抽正文；文本截断。
-     * Agent 区额外把原文件复制到 `agent-uploads`，让 Termux 能按绝对路径处理
+     * Agent 区额外把原文件复制到 `agent-uploads`，让 phone_sh 能按绝对路径处理
      * （图片除外，它与 [extract] 保持同样的行为，只走图片块）。
      */
     fun extractLocal(context: Context, file: java.io.File, forAgent: Boolean = false): List<Attachment> {

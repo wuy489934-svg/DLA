@@ -49,7 +49,11 @@ object LlmClient {
      * （用户：图片 + “这是你的形象立绘，仅供你认识自己”；助手：“我看到自己了”），
      * 这样模型会把它当成「自己的样子」，而不是用户发来的照片。
      */
-    fun buildMessages(history: List<com.example.chatdemo.nativeui.Turn>, imageDataUrl: String?): JSONArray {
+    fun buildMessages(
+        history: List<com.example.chatdemo.nativeui.Turn>,
+        imageDataUrl: String?,
+        imageNote: String? = null,
+    ): JSONArray {
         val array = JSONArray()
         val block = imageDataUrl?.let { imageBlock(it) }
         if (block != null) {
@@ -63,7 +67,10 @@ object LlmClient {
                                 "text",
                                 "（应用底层注入：这是你的形象立绘，供你认识自己的外貌。" +
                                     "仅作认知，不需要评论、也不要在回复里提起，除非对方主动问起你的样子。" +
-                                    "用户本人并没有发送任何图片。）",
+                                    "如果它和文字设定冲突，以文字设定为准。" +
+                                    "用户本人并没有发送任何图片。" +
+                                    (imageNote?.takeIf { it.isNotBlank() }?.let { "【重要】$it" } ?: "") +
+                                    "）",
                             ),
                         )
                     },

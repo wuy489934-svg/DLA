@@ -199,7 +199,7 @@ object Lang {
         "改用系统文件夹选择器" to "Use system folder picker",
         "选中的文件里没有可用的内容" to "Nothing usable in the selected files",
 
-        // ---- 复制 / 图片预览 / 草稿 ----
+        // ---- 复制 / 图片预览 ----
         "复制文本" to "Copy text",
         "复制全部" to "Copy all",
         "复制" to "Copy",
@@ -217,10 +217,6 @@ object Lang {
         "测试中…" to "Testing…",
         "拉取并测试连接" to "Fetch models & test",
         "已保存" to "Saved",
-        "界面" to "Interface",
-        "当前使用原生界面。网页界面保留为兼容外壳，随时可以打开。" to
-            "You are using the native UI. The web UI is kept as a compatibility shell and can be opened at any time.",
-        "打开网页界面" to "Open web UI",
         "主题" to "Theme",
         "深色" to "Dark",
         "浅色" to "Light",
@@ -242,13 +238,10 @@ object Lang {
         "上传立绘" to "Upload portrait",
         "移除" to "Remove",
         "镜子模式（内置人设 + 立绘）" to "Mirror mode (built-in persona + portrait)",
-        "镜子模式（未内置人设）" to "Mirror mode (no built-in persona)",
         "人设与立绘只在 LLM 区生效；开启镜子模式会覆盖自定义人设。" to
             "Persona and portrait apply to LLM chat only; mirror mode overrides a custom persona.",
-        "开源版不内置人设与立绘：镜子模式开关保留，但需要自行放入 assets/mirror_persona.txt 与 assets/mirror_portrait.webp 才会生效。" to
-            "This open-source build ships no built-in persona or portrait. The mirror-mode switch is kept, but it only takes effect after you provide assets/mirror_persona.txt and assets/mirror_portrait.webp.",
         "更多" to "More",
-        "MCP / Termux / 数据管理" to "MCP / Termux / Data",
+        "运行环境 / MCP / 数据" to "Runtime / MCP / Data",
         "DLA · 本地智能体\n模型来自 DeepSeek，非官方产品。\n数据只存在本机。" to
             "DLA · Local agent\nPowered by DeepSeek, not an official product.\nAll data stays on this device.",
 
@@ -269,30 +262,24 @@ object Lang {
         "请先填写 URL" to "Enter a URL first",
         "需要 HTTPS 地址" to "An HTTPS address is required",
 
-        // ---- 高级设置：Termux ----
-        "Termux 环境" to "Termux environment",
-        "需要 Termux 里 allow-external-apps=true 并给 DLA 授予 Run commands 权限。" to
-            "Requires allow-external-apps=true in Termux and the Run commands permission granted to DLA.",
-        "Termux：%s" to "Termux: %s",
-        "已安装" to "Installed",
-        "未安装" to "Not installed",
-        "版本：%s" to "Version: %s",
-        "Run commands 权限：%s" to "Run commands permission: %s",
-        "已授予" to "Granted",
-        "未授予" to "Not granted",
-        "打开 Termux" to "Open Termux",
+        // ---- 高级设置：运行环境 ----
+        "运行环境" to "Runtime",
+        "全部内置，不需要安装 Termux；命令以应用身份运行，不会修改系统。" to
+            "Everything is built in; Termux is not required. Commands run as the app identity and never modify the system.",
+        "本机终端" to "Terminal",
+        "Android %s · toybox %d 条命令" to "Android %s · %d toybox commands",
+        "内置 %s" to "Built-in %s",
+        "检测中…" to "Checking…",
+        "工作目录" to "Working dir",
+        "运行自检" to "Run self-check",
+        "自检中…" to "Checking…",
         "应用权限" to "App permissions",
-        "测试连通" to "Test connection",
-        "复制授权命令" to "Copy grant command",
-        "已复制" to "Copied",
-        "Termux 授权命令" to "Termux permission command",
-
         // ---- 高级设置：数据 ----
         "数据" to "Data",
         "会话数：统计中…" to "Sessions: counting…",
         "会话数：%d" to "Sessions: %d",
-        "网页留下的历史会在原生会话仓库初始化时自动导入一次，只补缺失，无需手动导入。" to
-            "History left by the web UI is imported once when the native session store initializes. Only missing sessions are added, so no manual import is needed.",
+        "旧版本留下的历史会在会话仓库初始化时自动导入一次，只补缺失，无需手动导入。" to
+            "History left by older versions is imported once when the session store initializes. Only missing sessions are added, so no manual import is needed.",
         "正在导出诊断…" to "Exporting diagnostics…",
         "导出中…" to "Exporting…",
         "导出诊断" to "Export diagnostics",
@@ -307,15 +294,24 @@ object Lang {
         "已删除 %d 个会话" to "Deleted %d session|Deleted %d sessions",
         "删除" to "Delete",
 
-        // ---- 高级设置：Shizuku ----
-        "手机能力（Shizuku）" to "Device capabilities (Shizuku)",
-        "Shizuku 提供 uid 2000 的 shell，用于手机工具；和 Termux 二选一即可运行 Agent。" to
-            "Shizuku provides a uid 2000 shell for device tools; either Shizuku or Termux is enough to run the Agent.",
-        "状态：未运行（手机重启后需要重新启动 Shizuku）" to
-            "Status: not running (start Shizuku again after a phone reboot)",
-        "状态：已运行，未授权" to "Status: running, not authorized",
-        "状态：已就绪" to "Status: ready",
+        // ---- 高级设置：手机能力（无障碍 + Shizuku）----
+        "手机能力" to "Device capabilities",
+        "读屏、截图、点按走系统无障碍服务，不需要 Shizuku；Shizuku 只用于 pm/am/settings 这类特权命令。" to
+            "Screen reading, screenshots and taps use Android's accessibility service and do not need Shizuku; Shizuku is only for privileged commands such as pm/am/settings.",
+        "无障碍服务：%s" to "Accessibility service: %s",
+        "已开启" to "on",
+        "未开启" to "off",
+        "未开启时读屏、截图、点按文字都不可用：打开系统无障碍设置，在「已下载的应用」里找到 DLA 并打开。" to
+            "Without it, screen reading, screenshots and tapping by text are unavailable: open the system accessibility settings and enable DLA under downloaded apps.",
+        "打开无障碍设置" to "Open accessibility settings",
+        "Shizuku：%s" to "Shizuku: %s",
+        "未运行" to "not running",
+        "已运行，未授权" to "running, not authorized",
+        "已就绪" to "ready",
+        "需要特权命令时：打开 Shizuku，用无线调试点「启动」（手机重启后要重新启动）。" to
+            "For privileged commands: open Shizuku and tap Start (it must be started again after a reboot).",
         "打开 Shizuku" to "Open Shizuku",
+        "请求授权" to "Request permission",
         "测试 shell" to "Test shell",
         "执行失败" to "Command failed",
 
@@ -338,5 +334,119 @@ object Lang {
         "连接成功（该服务未提供模型列表）" to "Connected (the service returned no model list)",
         "连接成功，发现 %d 个模型" to "Connected, found %d model|Connected, found %d models",
         "网络错误" to "Network error",
+
+        // ---- 设置：TTS ----
+        "朗读回答（TTS）" to "Read replies aloud (TTS)",
+        "朗读引擎：%s" to "Speech engine: %s",
+        "选择引擎" to "Choose engine",
+        "选择朗读引擎" to "Choose a speech engine",
+        "添加语音提供商" to "Add speech provider",
+        "编辑语音提供商" to "Edit speech provider",
+        "合成中…" to "Synthesizing…",
+        "试听已发送（若没有声音，检查音量或引擎设置）" to
+            "Preview sent (if you hear nothing, check the volume or engine settings)",
+        "试听失败：%s" to "Preview failed: %s",
+        "系统语音不可用：%s" to "System speech unavailable: %s",
+        "也可以添加一个云端语音提供商，不依赖本机引擎。" to
+            "You can also add a cloud speech provider that does not rely on the local engine.",
+        "系统语音已就绪" to "System speech ready",
+        "正在初始化系统语音…" to "Starting system speech…",
+        "开启朗读或点「试听」时才会初始化系统语音。" to
+            "System speech starts only when you enable reading or tap Preview.",
+        "云端语音不可用：%s" to "Cloud speech unavailable: %s",
+        "正在合成语音…" to "Synthesizing speech…",
+        "云端语音可用" to "Cloud speech available",
+        "点「试听」验证这个提供商（合成一次，播放一次）。" to
+            "Tap Preview to verify this provider (one synthesis, one playback).",
+        "默认使用本机系统语音；也可以添加 OpenAI 兼容的云端 TTS（如 /audio/speech）。密钥只存在本机。" to
+            "System speech is the default; you can also add an OpenAI-compatible cloud TTS (e.g. /audio/speech). Keys stay on this device.",
+        "已切换到「%s」" to "Switched to \"%s\"",
+        "已删除「%s」" to "Deleted \"%s\"",
+        "已保存并切换到「%s」" to "Saved and switched to \"%s\"",
+        "未命名" to "Unnamed",
+        "使用中" to "In use",
+        "编辑" to "Edit",
+        "关闭" to "Close",
+        "名称（例如：我的云端语音）" to "Name (e.g. My cloud voice)",
+        "Base URL（例如 https://api.openai.com/v1）" to "Base URL (e.g. https://api.openai.com/v1)",
+        "API Key（只存本机）" to "API key (stored only on this device)",
+        "模型（例如 tts-1 / FunAudioLLM/CosyVoice2-0.5B）" to "Model (e.g. tts-1 / FunAudioLLM/CosyVoice2-0.5B)",
+        "音色（例如 alloy / 中文女）" to "Voice (e.g. alloy)",
+        "格式" to "Format",
+        "语速" to "Speed",
+        "协议：POST {Base URL}/audio/speech，Body 为 model / input / voice / response_format / speed。" to
+            "Protocol: POST {Base URL}/audio/speech with model / input / voice / response_format / speed.",
+        "测试" to "Test",
+        "测试中…" to "Testing…",
+        "合成并播放成功" to "Synthesized and played",
+        "失败：%s" to "Failed: %s",
+        "先填一个名称" to "Enter a name first",
+
+        "语音引擎不可用：%s" to "Speech engine unavailable: %s",
+        "打开语音设置" to "Open speech settings",
+        "试听" to "Preview voice",
+        "语音引擎已就绪" to "Speech engine ready",
+        "正在初始化语音引擎…" to "Starting the speech engine…",
+        "开启朗读或点「试听」时才会初始化语音引擎。" to
+            "The speech engine starts only when you enable reading or tap Preview voice.",
+        "你好，我是你的伙伴，今天想聊点什么？" to "Hi, I'm here for you. What would you like to talk about?",
+        "朗读" to "Read aloud",
+        "停止" to "Stop",
+
+        // ---- 角色设定（分层）----
+        "角色设定（仅 LLM 区）" to "Character settings (LLM chat only)",
+        "清空" to "Clear",
+        "清空角色设定？" to "Clear the character settings?",
+        "会清空所有分层设定（立绘不受影响），用于重新开始。" to
+            "This clears every layer (the portrait is kept) so you can start over.",
+        "已清空角色设定" to "Character settings cleared",
+        "分层填写更容易稳定。文字写得越具体，角色越不容易跑偏；上传一张立绘后 AI 对角色的把握最强，不传图也能只靠文字。" to
+            "Filling the layers makes the character stable. The more specific the text, the less the model drifts; uploading a portrait gives the strongest grasp of the character, and text alone also works.",
+        "核心身份" to "Core identity",
+        "性格与表达" to "Personality & expression",
+        "关系与背景" to "Relationship & background",
+        "边界与底线" to "Boundaries",
+        "补充" to "Extra",
+        "收起" to "Collapse",
+        "展开" to "Expand",
+        "保存设定" to "Save settings",
+        "已保存角色设定" to "Character settings saved",
+        "AI 补全设定" to "AI complete settings",
+        "补全中…" to "Completing…",
+        "补全失败" to "Completion failed",
+        "上传图片分析" to "Analyze a picture",
+        "分析中…" to "Analyzing…",
+        "图片分析失败" to "Image analysis failed",
+        "没有读到图片" to "Could not read the picture",
+        "上传立绘" to "Upload portrait",
+        "更换立绘" to "Replace portrait",
+        "移除立绘" to "Remove portrait",
+        "立绘已保存；它会让 AI 对角色的把握更强" to "Portrait saved; it strengthens the AI's grasp of the character",
+        "上传立绘后，它会作为「你的样子」注入给她；如果图片和文字设定冲突，以文字为准。" to
+            "After uploading, the portrait is injected as “how you look”; if it conflicts with the text, the text wins.",
+        "正在让 AI 先考虑情感需求、事实定义与用户安全，再动笔…" to
+            "Asking the AI to consider emotional needs, factual consistency and user safety before writing…",
+        "镜子模式生效时会覆盖上面的自定义设定，改用内置人设。" to
+            "Mirror mode overrides the custom settings above and uses the built-in persona.",
+        "图片分析结果" to "Picture analysis",
+        "AI 补全结果" to "AI completion",
+        "没有空缺字段可补全；已有设定不会被覆盖。" to
+            "No empty fields to fill; existing settings are never overwritten.",
+        "只会补写下面这些为空的字段，已有内容不动：" to
+            "Only these empty fields will be filled; existing text stays unchanged:",
+        "已补全 %d 项设定" to "Completed %d setting|Completed %d settings",
+        "应用到设定" to "Apply to settings",
+        "应用并设为立绘" to "Apply and use as portrait",
+        "已应用，并把这张图设为立绘" to "Applied, and this picture is now the portrait",
+        "模型没有返回可用的设定，请重试" to "The model returned no usable settings; please try again",
+        "名字 / 称呼" to "Name / how to address",
+        "身份 / 物种 / 年龄感" to "Identity / species / age",
+        "外貌" to "Appearance",
+        "性格" to "Personality",
+        "说话风格 / 口癖" to "Speaking style / verbal tics",
+        "情感表达" to "Emotional expression",
+        "与用户的关系" to "Relationship with the user",
+        "来历 / 背景" to "Background",
+        "边界与底线（必须遵守）" to "Boundaries (must follow)",
     )
 }

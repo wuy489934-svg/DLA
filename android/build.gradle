@@ -3,4 +3,6 @@ plugins {
     id 'com.android.application' version '8.9.2' apply false
     id 'org.jetbrains.kotlin.android' version '2.1.0' apply false
     id 'org.jetbrains.kotlin.plugin.compose' version '2.1.0' apply false
+    // 内置 Python（Chaquopy）：解释器以 JNI 方式跑在 :agent 进程里，不需要 Termux
+    id 'com.chaquo.python' version '17.2.0' apply false
 }
