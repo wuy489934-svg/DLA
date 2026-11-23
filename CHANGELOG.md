@@ -1,5 +1,21 @@
 # Changelog
 
+## 3.0
+
+- **Settings, rebuilt for scanning.** Every block is now a titled card with an accent bar
+  (model endpoint / appearance / conversation / reading / character / more), so the
+  screen can be read at a glance instead of one long undifferentiated list.
+- **Speech is Qwen3-TTS only.** Besides the built-in system speech engine, DLA now
+  talks to Alibaba Cloud Bailian Qwen3-TTS (`qwen3-tts-flash`) and nothing else: paste
+  a Bailian API key, pick a voice (Cherry / Serena / Ethan / Chelsie, or type your own),
+  choose the Beijing or Singapore region, and preview. Long replies are split by
+  sentence (the API caps a request at 600 characters) and played back to back.
+- **Read-aloud is off by default.** A one-time migration also turns it off for people
+  upgrading from 2.x; the switch lives under Settings → Reading.
+- **Docs for 3.0:** README now explains the LLM area, how DSH (DeepSeek Harness) was
+  used to build this repo and roughly how much of the work it did, the author's role,
+  and what “fully open source” means here.
+
 ## 2.5
 
 - **Read replies aloud, with your own voice provider.** TTS is back with a switch,

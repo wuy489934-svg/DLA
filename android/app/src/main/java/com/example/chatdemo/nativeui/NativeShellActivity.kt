@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
@@ -1295,7 +1296,6 @@ private fun ConversationSettings() {
     var search by remember { mutableStateOf(ChatEngine.search) }
     var autoApprove by remember { mutableStateOf(ChatEngine.autoApprove) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(Lang.t("对话"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
         SettingSwitch(Lang.t("深度思考（LLM 区）"), thinking) { thinking = it; ChatEngine.thinking = it }
         SettingSwitch(Lang.t("联网搜索（LLM 区）"), search) { search = it; ChatEngine.search = it }
         SettingSwitch(Lang.t("完全权限（Agent 不再逐次确认）"), autoApprove) {
@@ -1308,7 +1308,6 @@ private fun ConversationSettings() {
             ChatEngine.soundEnabled = it
             if (it) SoundFeedback.send()
         }
-        TtsSettings()
         var location by remember { mutableStateOf(ChatEngine.location) }
         OutlinedTextField(
             value = location,
@@ -1826,6 +1825,46 @@ private fun Modifier.navigationBarsPaddingCompat(): Modifier =
 // ---------------- 设置 ----------------
 
 @OptIn(ExperimentalMaterial3Api::class)
+/**
+ * 设置区块：左侧强调条 + 标题/说明 + 圆角卡片。
+ * 所有卡片共用同一套间距与边框，滚动时一眼能分出「模型 / 外观 / 对话 / 朗读 / 角色设定 / 更多」。
+ */
+@Composable
+private fun SettingsSection(
+    title: String,
+    caption: String?,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(14.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(DlaColors.Mint.copy(alpha = 0.9f)),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(title, color = DlaColors.Text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            if (!caption.isNullOrBlank()) {
+                Spacer(Modifier.width(8.dp))
+                Text(caption, color = DlaColors.TextDim, fontSize = 10.sp)
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(DlaColors.Surface)
+                .border(1.dp, DlaColors.Line, RoundedCornerShape(16.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            content = content,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsScreen(
     onBack: () -> Unit,
@@ -1868,95 +1907,100 @@ private fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(Lang.t("模型接口"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(
-                value = key,
-                onValueChange = { key = it; saved = false },
-                label = { Text("API Key") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = base,
-                onValueChange = { base = it; saved = false },
-                label = { Text(Lang.t("Base URL（留空用默认）")) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = model,
-                onValueChange = { model = it; saved = false },
-                label = { Text(Lang.t("模型（留空用默认）")) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = {
-                    ChatEngine.apiKey = key
-                    if (base.isNotBlank()) ChatEngine.baseUrl = base
-                    if (model.isNotBlank()) ChatEngine.model = model
-                    saved = true
-                }) { Text(Lang.t("保存"), color = DlaColors.Mint) }
-                TextButton(
-                    onClick = {
+            SettingsSection(Lang.t("模型接口"), Lang.t("DeepSeek 兼容端点")) {
+                OutlinedTextField(
+                    value = key,
+                    onValueChange = { key = it; saved = false },
+                    label = { Text("API Key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = base,
+                    onValueChange = { base = it; saved = false },
+                    label = { Text(Lang.t("Base URL（留空用默认）")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it; saved = false },
+                    label = { Text(Lang.t("模型（留空用默认）")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
                         ChatEngine.apiKey = key
                         if (base.isNotBlank()) ChatEngine.baseUrl = base
-                        testing = true
-                        testResult = ""
-                        scope.launch {
-                            val r = withContext(Dispatchers.IO) {
-                                NativeApi.fetchModels(ChatEngine.apiKey, ChatEngine.baseUrl)
+                        if (model.isNotBlank()) ChatEngine.model = model
+                        saved = true
+                    }) { Text(Lang.t("保存"), color = DlaColors.Mint) }
+                    TextButton(
+                        onClick = {
+                            ChatEngine.apiKey = key
+                            if (base.isNotBlank()) ChatEngine.baseUrl = base
+                            testing = true
+                            testResult = ""
+                            scope.launch {
+                                val r = withContext(Dispatchers.IO) {
+                                    NativeApi.fetchModels(ChatEngine.apiKey, ChatEngine.baseUrl)
+                                }
+                                testResult = r.message
+                                testOk = r.ok
+                                testing = false
                             }
-                            testResult = r.message
-                            testOk = r.ok
-                            testing = false
-                        }
-                    },
-                    enabled = !testing,
-                ) { Text(if (testing) Lang.t("测试中…") else Lang.t("拉取并测试连接"), color = DlaColors.Warm) }
-                if (saved) Text(Lang.t("已保存"), color = DlaColors.TextDim, fontSize = 11.sp)
-            }
-            if (testResult.isNotBlank()) {
-                Text(
-                    testResult,
-                    color = if (testOk) DlaColors.Mint else DlaColors.Error,
-                    fontSize = 11.sp,
-                )
+                        },
+                        enabled = !testing,
+                    ) { Text(if (testing) Lang.t("测试中…") else Lang.t("拉取并测试连接"), color = DlaColors.Warm) }
+                    if (saved) Text(Lang.t("已保存"), color = DlaColors.TextDim, fontSize = 11.sp)
+                }
+                if (testResult.isNotBlank()) {
+                    Text(
+                        testResult,
+                        color = if (testOk) DlaColors.Mint else DlaColors.Error,
+                        fontSize = 11.sp,
+                    )
+                }
             }
 
-
-            HorizontalDivider(color = DlaColors.Line)
-            Text(Lang.t("主题"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeChip(Lang.t("深色"), themeMode == "dark") { onThemeMode("dark") }
-                ThemeChip(Lang.t("浅色"), themeMode == "light") { onThemeMode("light") }
-                ThemeChip(Lang.t("跟随系统"), themeMode == "system") { onThemeMode("system") }
+            SettingsSection(Lang.t("外观"), Lang.t("主题与语言")) {
+                Text(Lang.t("主题"), color = DlaColors.TextDim, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemeChip(Lang.t("深色"), themeMode == "dark") { onThemeMode("dark") }
+                    ThemeChip(Lang.t("浅色"), themeMode == "light") { onThemeMode("light") }
+                    ThemeChip(Lang.t("跟随系统"), themeMode == "system") { onThemeMode("system") }
+                }
+                HorizontalDivider(color = DlaColors.Line)
+                Text(Lang.t("语言"), color = DlaColors.TextDim, fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val languageMode = Lang.mode()
+                    ThemeChip(Lang.t("中文"), languageMode == Lang.ZH) { switchLanguage(context, Lang.ZH) }
+                    ThemeChip("English", languageMode == Lang.EN) { switchLanguage(context, Lang.EN) }
+                    ThemeChip(Lang.t("跟随系统"), languageMode == Lang.SYSTEM) { switchLanguage(context, Lang.SYSTEM) }
+                }
             }
 
-            // 语言：写偏好后 recreate，整棵树重新按新语言取值；
-            // 页面本身由 rememberSaveable 记住，回来后还停在这里。
-            HorizontalDivider(color = DlaColors.Line)
-            Text(Lang.t("语言"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val languageMode = Lang.mode()
-                ThemeChip(Lang.t("中文"), languageMode == Lang.ZH) { switchLanguage(context, Lang.ZH) }
-                ThemeChip("English", languageMode == Lang.EN) { switchLanguage(context, Lang.EN) }
-                ThemeChip(Lang.t("跟随系统"), languageMode == Lang.SYSTEM) { switchLanguage(context, Lang.SYSTEM) }
+            SettingsSection(Lang.t("对话"), Lang.t("思考 · 搜索 · 权限")) {
+                ConversationSettings()
             }
 
-            HorizontalDivider(color = DlaColors.Line)
-            ConversationSettings()
+            SettingsSection(Lang.t("朗读"), Lang.t("默认关闭 · 系统语音 / Qwen3-TTS")) {
+                TtsSettings()
+            }
 
-            HorizontalDivider(color = DlaColors.Line)
-            PersonaSettings()
+            SettingsSection(Lang.t("角色设定"), Lang.t("仅 LLM 区")) {
+                PersonaSettings()
+            }
 
-            HorizontalDivider(color = DlaColors.Line)
-            Text(Lang.t("更多"), color = DlaColors.TextDim, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = onAdvanced) { Text(Lang.t("运行环境 / MCP / 数据"), color = DlaColors.Mint) }
+            SettingsSection(Lang.t("更多"), null) {
+                TextButton(onClick = onAdvanced) {
+                    Text(Lang.t("运行环境 / MCP / 数据"), color = DlaColors.Mint)
+                }
+            }
 
-            HorizontalDivider(color = DlaColors.Line)
             Text(
                 Lang.t("DLA · 本地智能体\n模型来自 DeepSeek，非官方产品。\n数据只存在本机。"),
                 color = DlaColors.TextDim,

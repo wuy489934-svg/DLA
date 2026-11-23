@@ -98,6 +98,7 @@ object ChatEngine {
         app = context.applicationContext
         prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         store = SessionStore(app)
+        migrateTtsDefaultOff()
         // 历史遗留的空会话（有壳没内容）统一清掉；有草稿的会留下
         runCatching { store.pruneEmpty() }
         attachListener()
@@ -161,6 +162,19 @@ object ChatEngine {
     var ttsEnabled: Boolean
         get() = prefs.getBoolean(KEY_TTS, false)
         set(value) = prefs.edit().putBoolean(KEY_TTS, value).apply()
+
+    /**
+     * 3.0 起朗读默认关闭：老版本升上来也强制回到关闭一次，
+     * 之后用户自己打开的值继续保留（只迁移一次）。
+     */
+    private fun migrateTtsDefaultOff() {
+        if (prefs.getBoolean("ttsDefaultOffMigrated", false)) return
+        prefs.edit()
+            .putBoolean(KEY_TTS, false)
+            .putBoolean("ttsDefaultOffMigrated", true)
+            .apply()
+    }
+
 
     /** 所在地区（喂给模型作参考，可留空） */
     var location: String

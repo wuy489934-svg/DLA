@@ -9,11 +9,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 朗读的统一入口：按用户选中的 TTS provider 分流。
+ * 朗读的统一入口：系统 TTS 或 Qwen3-TTS。
  *
- * - 系统引擎：交给 [Speaker]（本机 TTS，免配置，默认）；
- * - 云端引擎：后台合成音频，再交给 [CloudTts] 播放。
- *
+ * 默认是系统 TTS（免配置）；选 Qwen3-TTS 时需要用户在设置里填百炼 API Key。
  * 两条路都只回调一次「结束」，UI 靠它复位喇叭按钮。
  */
 object TtsEngine {
@@ -25,68 +23,79 @@ object TtsEngine {
         data class Unavailable(val reason: String) : Status
     }
 
-    private const val CLOUD_MAX_CHARS = 3000
     private val mainHandler = Handler(Looper.getMainLooper())
     private val generation = AtomicLong(0)
 
     private val _status = MutableStateFlow<Status>(Status.Idle)
     val status: StateFlow<Status> = _status.asStateFlow()
 
-    fun provider(context: Context): TtsProvider = TtsStore.selected(context)
+    fun engine(context: Context): TtsEngineKind = TtsStore.engine(context)
 
-    /** 试听/朗读：按当前 provider 播放一段文字。 */
+    /** 按当前选中的引擎朗读一段文字。 */
     fun speak(context: Context, text: String, onDone: (() -> Unit)? = null) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) {
             onDone?.invoke()
             return
         }
-        val provider = provider(context)
-        if (provider.isSystem()) {
-            _status.value = Status.Ready
-            Speaker.speakWhenReady(context, trimmed, onDone)
-            return
-        }
-        val token = generation.incrementAndGet()
-        _status.value = Status.Synthesizing
-        Thread({
-            try {
-                val bytes = CloudTts.synthesize(context, provider, trimmed.take(CLOUD_MAX_CHARS))
-                if (generation.get() != token) {
-                    return@Thread
-                }
+        when (TtsStore.engine(context)) {
+            TtsEngineKind.SYSTEM -> {
                 _status.value = Status.Ready
-                CloudTts.play(context, bytes, provider.format, onDone)
-            } catch (error: Throwable) {
-                if (generation.get() == token) {
-                    val message = error.message ?: error.javaClass.simpleName
-                    _status.value = Status.Unavailable(message)
-                    mainHandler.post { onDone?.invoke() }
-                }
+                Speaker.speakWhenReady(context, trimmed, onDone)
             }
-        }, "dla-tts").start()
+            TtsEngineKind.QWEN -> speakQwen(context, TtsStore.qwen(context), trimmed, onDone)
+        }
     }
 
-    /** 试听指定 provider（不切换默认），结果回主线程。 */
-    fun preview(context: Context, provider: TtsProvider, text: String, onResult: (Result<Unit>) -> Unit) {
-        if (provider.isSystem()) {
+    /** 试听指定引擎/配置（不落盘），结果回主线程。 */
+    fun preview(
+        context: Context,
+        kind: TtsEngineKind,
+        qwen: QwenTtsConfig,
+        text: String,
+        onResult: (Result<Unit>) -> Unit,
+    ) {
+        if (kind == TtsEngineKind.SYSTEM) {
             Speaker.ensure(context)
             Speaker.speakWhenReady(context, text) { mainHandler.post { onResult(Result.success(Unit)) } }
             return
         }
         Thread({
             val result = runCatching {
-                val bytes = CloudTts.synthesize(context, provider, text)
-                CloudTts.play(context, bytes, provider.format, null)
+                val (audios, _) = QwenTts.synthesizeAll(qwen, text)
+                QwenTts.playQueue(context, audios, null)
             }
             mainHandler.post { onResult(result) }
-        }, "dla-tts-preview").start()
+        }, "dla-qwen-preview").start()
+    }
+
+    private fun speakQwen(
+        context: Context,
+        config: QwenTtsConfig,
+        text: String,
+        onDone: (() -> Unit)?,
+    ) {
+        val token = generation.incrementAndGet()
+        _status.value = Status.Synthesizing
+        Thread({
+            try {
+                val (audios, _) = QwenTts.synthesizeAll(config, text)
+                if (generation.get() != token) return@Thread
+                _status.value = Status.Ready
+                QwenTts.playQueue(context, audios, onDone)
+            } catch (error: Throwable) {
+                if (generation.get() == token) {
+                    _status.value = Status.Unavailable(error.message ?: error.javaClass.simpleName)
+                    mainHandler.post { onDone?.invoke() }
+                }
+            }
+        }, "dla-qwen-tts").start()
     }
 
     fun stop() {
         generation.incrementAndGet()
         Speaker.stop()
-        CloudTts.stop()
+        QwenTts.stop()
         _status.value = Status.Idle
     }
 }

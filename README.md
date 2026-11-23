@@ -8,7 +8,7 @@
 <p align="center">跑在你自己 Android 手机上的本地智能体：原生 Compose 对话 + 可执行的 Agent 任务</p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img alt="version 2.5" src="https://img.shields.io/badge/version-2.5-7FE7C4" /></a>
+  <a href="CHANGELOG.md"><img alt="version 3.0" src="https://img.shields.io/badge/version-3.0-7FE7C4" /></a>
   <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-7FE7C4" /></a>
   <img alt="Android 10+" src="https://img.shields.io/badge/Android-10%2B-7FE7C4" />
 </p>
@@ -27,10 +27,59 @@
 
 <p align="center"><sub>演示为真机录屏：Agent 先 <code>tool_search</code> 发现 <code>termux</code> 工具，再调用执行并返回结果</sub></p>
 
+## LLM 区：不只是聊天框
+
+DLA 的 LLM 区是这一版的重点，目标不是「能对话」，而是「像一个有设定的伙伴」：
+
+- **会说话**：回复可以逐条朗读，也可以自动朗读。引擎二选一——本机系统语音（零配置、离线），
+  或 **Qwen3-TTS**（阿里云百炼，填自己的 API Key，可选 Cherry / Serena / Ethan / Chelsie 等音色，
+  北京/新加坡两个区域）。朗读**默认关闭**，开关在「设置 → 朗读」。
+- **人设有层次**：角色设定拆成 10 个字段、5 个分组（核心身份、性格与表达、关系与背景、边界与底线、补充），
+  旧版单段人设自动迁移，一个字不丢。
+- **AI 补全**：让模型先过三关——情感需求、事实定义、用户安全——再动笔，只补空字段，结果先预览再应用。
+- **图片一键分析**：上传一张图，模型把它当作角色形象，补全外貌/身份/性格，可直接设为立绘。
+- **文字压过图片**：立绘只补充文字没写到的细节；两者冲突时，以文字设定为准。
+- **图片认知**：立绘作为隐藏上下文注入，模型知道「这是我自己」，但不会误以为用户发了图。
+- 深度思考、联网搜索、附件、长会话、工具调用都在同一套会话里。
+
+## 这个工程是怎么用 DSH 做出来的
+
+DLA 的开发全程在 **DeepSeek Harness（DSH）** 里进行。DSH 是命令行式的 AI 编程代理：给它一个任务，
+它自己读代码、改文件、跑构建、连手机验证，再把结果交回来。这个仓库 2.2 → 3.0 的改动，都是这样一轮一轮跑出来的。
+
+### DSH 工具用在哪、占多少
+
+| 环节 | DSH 的工具 / 场景 | 大致占比 |
+|---|---|---|
+| 读代码、定位问题 | 读文件、grep/glob 检索 | ≈95% |
+| 改代码 | 写文件 / 精确替换（Kotlin、Java、Gradle、Python 脚本） | ≈95% 的代码行 |
+| 构建与签名 | shell 跑 Gradle、切换 release keystore、aapt2/apksigner 校验 | ≈100% |
+| 真机验证 | adb 安装、logcat、uiautomator、截图比对 | ≈90% |
+| 查资料 | 联网搜索、抓官方 API 文档（Qwen3-TTS、DeepSeek 语音） | ≈100% |
+| 文档与发布 | README/CHANGELOG/Release notes、git commit/tag/push、gh release | ≈90% |
+
+剩下的 5–10% 是作者亲手做的：定需求、拍板取舍、看真机效果、决定发不发。
+
+### 作者的实际定位
+
+作者是**产品负责人和验收人**：决定每一轮做什么、不做什么，判断结果对不对，最后按下发布。
+具体实现由 DSH 的代理完成并逐轮交付；作者不逐行写代码，但对每一行上线代码负责。
+
+## 完全开源
+
+- 许可证 **Apache-2.0**，应用层代码全部在本仓库，没有闭源模块。
+- 内置运行时（Android toybox、CPython 3.12、Node 24、ripgrep 15）由 `scripts/fetch-native.sh` 按版本下载，
+  **不把二进制提交进仓库**；各自的许可证见 `THIRD_PARTY_NOTICES.md`。
+- 没有任何密钥、签名文件、个人人设素材进入仓库（`.gitignore` 已覆盖）。
+- Release 由 GitHub Actions 用仓库 Secrets 里的发布密钥构建，产物附 `SHA256SUMS`。
+
+
 ## 这是什么
 
 - **原生界面（2.0 起）**：聊天、会话列表、设置、迭代树都是 Compose 原生实现；Markdown、表格、代码块原生排版，公式（KaTeX）与流程图（mermaid）交给内置离线渲染器，不用联网加载 CDN。
 - **Agent 独立进程**：Agent 服务跑在 `:agent` 进程，界面崩溃或重建都不会带走任务；界面通过 `AgentClient`（Messenger）重新接上并回放事件。
+- **3.0 · 设置页重排**：每个区块一张卡片（模型接口 / 外观 / 对话 / 朗读 / 角色设定 / 更多），左侧强调条 + 标题 + 说明，滚动时一眼能分清。
+- **3.0 · 朗读只对接 Qwen3-TTS**：系统语音之外只保留阿里云百炼的 Qwen3-TTS，填 Key、选音色和区域即可；朗读默认关闭。
 - **会说话（2.5）**：助手回复可以朗读——每条正文下有「🔊 朗读」，也可以在设置里打开自动朗读。默认用本机系统 TTS；用户还能自己添加 OpenAI 兼容的云端语音（Base URL / Key / 模型 / 音色 / 语速），随时切换、试听、编辑、删除，密钥只存本机。
 - **运行时全部内置（2.2）**：APK 里带 Android 自带的 shell（toybox）、CPython 3.12（Chaquopy）、Node 24 和 ripgrep，**不再需要 Termux**，装完就能对话。命令以应用身份运行；需要 `pm/am/settings` 这类特权命令时才用 Shizuku。点停止会结束整棵子进程树（进程组 + 会话），不会留下后台脚本。
 - **工具按需发现**：初始只注入核心手机操作（含读图 `phone_view_image`）与本机终端 `phone_sh`；Python（`phone_py`）、Node（`phone_js`）、文件、设置、zip、docx 等先 `tool_search` 搜索，命中后下一轮才进入工具列表。
@@ -133,4 +182,4 @@ licenses/  第三方许可证原文
 
 ## English summary
 
-DLA (DeepSeek LLM Agent) 2.5 is an unofficial, local-first Android agent client with a native Jetpack Compose UI. Version 2.2 removes the Termux dependency and the web shell entirely: the APK now bundles a shell (Android toybox), CPython 3.12 (Chaquopy), Node.js 24 and ripgrep, so the agent can run commands, Python and JavaScript on a bare install. Every runtime call is approval-gated, and stopping a run kills the whole process tree. It keeps the 2.1 features: message copy with selectable text, per-session drafts, context-aware “continue”, per-call tool timing, and `phone_view_image` so the model actually sees local pictures. LLM and Agent modes both talk to your own DeepSeek-compatible endpoint; chats, settings and diagnostics stay on the device, with no telemetry and no account. The Agent loop runs in a separate `:agent` process behind a foreground service, so it survives UI crashes. It is still not a sandbox: approvals are on by default, full access is opt-in. Arm64 devices only. See `docs/AGENT-RUNTIME.md` and `BUILD.md`.
+DLA (DeepSeek LLM Agent) 3.0 is an unofficial, local-first Android agent client with a native Jetpack Compose UI. Version 2.2 removes the Termux dependency and the web shell entirely: the APK now bundles a shell (Android toybox), CPython 3.12 (Chaquopy), Node.js 24 and ripgrep, so the agent can run commands, Python and JavaScript on a bare install. Every runtime call is approval-gated, and stopping a run kills the whole process tree. It keeps the 2.1 features: message copy with selectable text, per-session drafts, context-aware “continue”, per-call tool timing, and `phone_view_image` so the model actually sees local pictures. LLM and Agent modes both talk to your own DeepSeek-compatible endpoint; chats, settings and diagnostics stay on the device, with no telemetry and no account. The Agent loop runs in a separate `:agent` process behind a foreground service, so it survives UI crashes. It is still not a sandbox: approvals are on by default, full access is opt-in. Arm64 devices only. See `docs/AGENT-RUNTIME.md` and `BUILD.md`.
