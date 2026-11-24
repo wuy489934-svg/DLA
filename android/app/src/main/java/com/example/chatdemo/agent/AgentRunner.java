@@ -51,6 +51,21 @@ public final class AgentRunner {
     private static final int MAX_NOTE_CHARS = 4000;
     private static final int TOOL_PARALLELISM = 3;
     private static final long TOOL_CACHE_MS = 3000;
+    private static final int MAX_AUTO_CONTINUES = 3;
+
+    /**
+     * 工具参数在 max_tokens 处被截断时的可恢复错误。
+     *
+     * 以前这种调用会在 assistantMessage() 里 new JSONObject(...) 抛异常，
+     * 直接把整轮运行结束掉（用户看到 "Unterminated string at character ..."）。
+     * 现在改成：不执行这次调用，把原因和「怎么拆」告诉模型，让它在同一轮里重试。
+     */
+    private static final String TRUNCATED_ARGS_HINT =
+            "工具参数不是合法 JSON：这次调用在生成到一半时被截断了（通常是 max_tokens 用尽，"
+                    + "或者一次写入的内容太长）。本次没有执行。\n"
+                    + "请拆小重试：先用 phone_write 写入第一段（建议每段不超过 3000 字符），"
+                    + "再用 phone_append 逐段追加到同一个文件；也可以改用 phone_py / phone_sh 生成文件。\n"
+                    + "不要原样重发整段内容，也不要改成一个巨大的参数。";
 
     private static final ExecutorService TOOL_POOL = Executors.newFixedThreadPool(
             TOOL_PARALLELISM,
@@ -75,6 +90,8 @@ public final class AgentRunner {
         final String id;
         final String name;
         final StringBuilder arguments = new StringBuilder();
+        /** 参数 JSON 不完整（多为 max_tokens 截断）：不执行，回一条可恢复的错误 */
+        boolean truncated;
 
         ToolCall(String id, String name) {
             this.id = id;
@@ -130,6 +147,13 @@ public final class AgentRunner {
     private final Emitter emitter;
     /** 完全权限：跳过危险工具审批 */
     private final boolean autoApprove;
+
+    /** 请求方言：anthropic（DeepSeek / Claude）或 openai（GPT / Qwen / GLM / Kimi / OpenRouter…） */
+    private final String protocol;
+    /** 供应商（由界面传上来；没传就按 baseUrl + 模型名自动识别），决定兼容开关 */
+    private final String provider;
+    /** 生效的 Base URL（界面没填时按协议给默认值） */
+    private final String apiBaseUrl;
     /** 长任务计划与笔记，会拼进 system，不受上下文裁剪影响 */
     private JSONArray plan = new JSONArray();
     private int planCurrent = 0;
@@ -197,19 +221,34 @@ public final class AgentRunner {
             + "只在这里可用；它不在工具列表里就说明 Shizuku 没就绪。\n"
             + "   · phone_screen / phone_screenshot / phone_tap* / phone_swipe / phone_input / phone_key = 无障碍，"
             + "只做界面操作，不提供系统信息。\n"
-            + "   铁律：phone_shell 跑通不等于「应用身份可用」；phone_sh 失败也不等于「本机做不到」——先换对身份再下结论。\n"
+            + "   铁律：phone_shell 跑通不等于「应用身份可用」；phone_sh 失败也不等于「本机做不到」——先换对身份再下结论。"
+            + "   每条工具结果开头的 [工具 · 身份] 就是来源，归因以它为准。\n"
             + "2) 查应用：包名/应用名用 phone_apps（PackageManager 接口，任何身份都能用）；versionCode、"
             + "APK 路径、安装来源、签名、targetSdk 只有 phone_shell 的 pm / dumpsys 拿得到；没有 Shizuku 就直说拿不到，"
-            + "并给出去「设置 → 手机能力」开启的路径。\n"
+            + "并给出去「设置 → 更多 → 手机能力」开启的路径。\n"
             + "3) 负证据无效：应用身份的 ps -A 只有自己那 3~4 个进程；/proc/net/tcp、ss、netstat、/data/app、"
             + "/proc/<别人的 pid> 都读不到。所以「没看到」不等于「没在跑」，端口探测失败不等于服务没开。"
             + "判断 Shizuku 只看【本机运行时】，或直接 phone_shell 跑 id。\n"
             + "4) 先测再断言：说「不可用 / 不支持 / 没权限」之前，用最小命令实测一次（如 id、pm list packages | head -1）；"
             + "没测就写「未验证」，不要写「应该可用 / 大概不行」。\n"
             + "5) 批量：互不依赖的只读检查合并——phone_sh 一条命令用 ; / && 串联多条，或同一轮同时发多个工具调用。\n"
-            + "6) 其他：屏幕类走无障碍；文件/设置/剪贴板/通知/zip/docx 先 tool_search；网络用 phone_sh + curl；"
-            + "脚本用 phone_py / phone_js（无 pip/npm）。\n"
-            + "7) 工具缺失：只说明缺哪个后端、怎么开启，不要反复换关键词试探同一能力。";
+            + "6) 其他：屏幕类走无障碍；文件/设置/剪贴板/通知/zip/docx 先 tool_search。\n"
+            + "   联网：web_fetch 是原生抓取（任何模型/供应商都能用），读单个链接首选它；"
+            + "web_search 在 DeepSeek 端点走官方搜索，其它供应商走免费后端（中文：百度 → Bing → Bing RSS → DuckDuckGo；英文：Bing → 百度 → Bing RSS → DuckDuckGo），"
+            + "可能被反爬或受网络影响。搜索失败时**不要下「联网坏了」的结论**，按顺序试："
+            + "① web_fetch 打开 https://cn.bing.com/search?q=关键词 读结果页标题，再抓具体链接；"
+            + "② 换个关键词或加 site:；③ 让用户给出网址。"
+            + "本机没有 curl / wget，脚本里用 node fetch 或 python urllib（都是纯标准库）。\n"
+            + "   脚本：phone_py / phone_js 都是纯标准库（无 pip/npm，也没有 PIL / requests）；「python3」不是 shell 命令，Python 跑在进程内。\n"
+            + "7) 大文件：单个工具参数不要超过约 3000 字符。大段 HTML / 长文本先 phone_write 写第一段，"
+            + "再用 phone_append 逐段追加；参数被截断时会返回可恢复的错误，按提示拆小重试，不要原样重发。\n"
+            + "8) 网页：默认输出兼容性最好的单文件 HTML——CSS/JS 全部内联，不依赖外部 CDN、字体或图片；"
+            + "关键效果不要只用 backdrop-filter / mask / :has() 这类新特性（旧内核会降级），布局从 360dp 到桌面都成立。"
+            + "生成或修改后先 tool_search「网页截图」，再用 phone_web_shot 在离屏 WebView 里自检（不打开浏览器、不抢前台）。\n"
+            + "9) 打开方式：不要只甩一个 file:// 链接——桌面 Edge / Chrome 打不开手机上的文件路径，"
+            + "Android 浏览器也常常禁止地址栏 file://。告诉用户用手机文件管理器打开，或把 HTML 复制到电脑再用浏览器打开；"
+            + "需要分享时，建议直接贴出 HTML 内容或让用户自己另存。\n"
+            + "10) 工具缺失：只说明缺哪个后端、怎么开启，不要反复换关键词试探同一能力。";
 
     /**
      * 放在 system prompt 最末尾的自检清单。
@@ -217,10 +256,10 @@ public final class AgentRunner {
      */
     private static final String SELF_CHECK =
             "【回答前自检（逐条过，再输出）】\n"
-            + "1) 身份：这条结论来自哪个工具？phone_sh/phone_py/phone_js 是应用身份，phone_shell 是 Shizuku；有没有说混？\n"
+            + "1) 身份：这条结论来自哪个工具？对照结果开头的 [工具 · 身份]；phone_sh/phone_py/phone_js 是应用身份，phone_shell 是 Shizuku，有没有说混？\n"
             + "2) 证据：每个「可用/不可用」都实测过吗？没测的写「未验证」，不要用「应该」「大概」。\n"
             + "3) 负证据：有没有拿 ps -A、/proc/net、ss、端口探测这类在应用身份下看不到全局的指标当证明？有就撤掉。\n"
-            + "4) 体验：用户能不能直接看懂结论和下一步？缺能力时有没有给出开启路径（设置 → 手机能力）？";
+            + "4) 体验：用户能不能直接看懂结论和下一步？缺能力时有没有给出开启路径（设置 → 更多 → 手机能力）？";
     private final Map<String, McpClient> clientByServer = new HashMap<>();
     /** 需要用户确认的 MCP 工具（按函数名） */
     private final Set<String> riskyTools = new HashSet<>();
@@ -242,11 +281,26 @@ public final class AgentRunner {
     /** 运行开始时实测一次的能力快照，拼进 system prompt（每轮复用，保持 prompt 稳定） */
     private String runtimeText = "";
 
+    /** 输出被 max_tokens 截断后自动续写的次数（长思考/长文不该把任务停掉） */
+    private int autoContinues = 0;
+
     public AgentRunner(Context context, JSONObject payload, Emitter emitter) {
         this.context = context.getApplicationContext();
         this.payload = payload;
         this.emitter = emitter;
         this.autoApprove = payload.optBoolean("autoApprove", false);
+        this.protocol = payload.optString("protocol", "anthropic").trim().toLowerCase();
+        // 供应商由界面传（设置页选过预设就有），否则按 Base URL / 模型名自动识别。
+        // 认错了最多少带一个可选字段，不会把请求写坏；认对则能避开各家兼容层的小坑。
+        String declared = payload.optString("provider", "").trim();
+        String configuredUrl = payload.optString("apiBaseUrl", "").trim();
+        if (configuredUrl.isEmpty()) {
+            configuredUrl = payload.optString("apiOrigin", "https://api.deepseek.com").trim();
+        }
+        this.apiBaseUrl = configuredUrl;
+        this.provider = declared.isEmpty()
+                ? ProviderCompat.detect(configuredUrl, payload.optString("model", ""), protocol)
+                : declared;
         if (payload.optBoolean("resumeTaskState", false)) {
             JSONArray savedPlan = payload.optJSONArray("resumePlan");
             if (savedPlan != null) {
@@ -341,6 +395,22 @@ public final class AgentRunner {
                 trimMessages(messages);
                 RoundResult result = streamRound(messages, tools);
                 if (result.toolCalls.isEmpty()) {
+                    // 长思考/长文把输出预算用光时，接口会以 max_tokens 收尾且没有工具调用。
+                    // 以前这里直接结束整轮任务，用户看到的就是「想了一会儿就停了」。
+                    // 现在自动续写：把已生成的部分作为 assistant 消息，追加一条「接着写」的提示。
+                    if ("max_tokens".equals(result.stopReason) && autoContinues < MAX_AUTO_CONTINUES) {
+                        autoContinues++;
+                        JSONObject partial = new JSONObject();
+                        partial.put("role", "assistant");
+                        partial.put("content", result.text.toString());
+                        messages.put(partial);
+                        JSONObject nudge = new JSONObject();
+                        nudge.put("role", "user");
+                        nudge.put("content", "（上一条输出达到长度上限被截断。请从中断处继续完成，不要重复已写内容，也不要重新开始。）");
+                        messages.put(nudge);
+                        emitStatus("输出达到上限，已自动继续（" + autoContinues + "/" + MAX_AUTO_CONTINUES + "）");
+                        continue;
+                    }
                     emitDone(result.stopReason);
                     return;
                 }
@@ -371,7 +441,8 @@ public final class AgentRunner {
                     start.put("id", call.id);
                     start.put("name", call.name);
                     start.put("input", call.arguments.length() == 0 ? "{}" : call.arguments.toString());
-                    boolean needsApproval = !repeated && !autoApprove
+                    boolean truncated = call.truncated;
+                    boolean needsApproval = !truncated && !repeated && !autoApprove
                             && (LocalTools.requiresApproval(call.name)
                             || RuntimeTools.requiresApproval(call.name)
                             || riskyTools.contains(call.name));
@@ -388,6 +459,11 @@ public final class AgentRunner {
                     long elapsed = 0;
                     boolean denied = false;
                     boolean cachedHit = false;
+                    if (truncated) {
+                        text = TRUNCATED_ARGS_HINT;
+                        isError = true;
+                        denied = true;
+                    }
                     if (repeated) {
                         text = "检测到连续 " + repeatCount + " 次完全相同的调用，已阻止。"
                                 + "请换一种方法、先读结果，或向用户说明卡点。";
@@ -449,6 +525,8 @@ public final class AgentRunner {
                                 + "（phone_sh 的 command 支持用 ; 或 && 串联多条），"
                                 + "或在同一轮里同时发出多个工具调用，避免把轮数耗在来回往返上。）";
                     }
+                    // 每条结果自带来源，模型不能把 phone_shell 的结论记到应用身份头上
+                    text = withSource(call.name, text);
                     JSONObject event = new JSONObject();
                     event.put("type", "tool_result");
                     event.put("id", call.id);
@@ -529,18 +607,49 @@ public final class AgentRunner {
         }
     }
 
+    /** 工具结果来源标签：让模型（和用户）永远知道这条结果是哪个身份跑出来的 */
+    private static String withSource(String toolName, String text) {
+        return "[" + toolName + " · " + identityOf(toolName) + "]\n" + text;
+    }
+
+    private static String identityOf(String toolName) {
+        if (toolName == null) return "本机工具";
+        if ("phone_shell".equals(toolName)) return "Shizuku uid 2000";
+        if ("phone_sh".equals(toolName) || "phone_py".equals(toolName) || "phone_js".equals(toolName)) {
+            return "应用身份";
+        }
+        if (toolName.startsWith("phone_screen") || toolName.startsWith("phone_tap")
+                || toolName.startsWith("phone_swipe") || toolName.startsWith("phone_input")
+                || toolName.startsWith("phone_key") || toolName.startsWith("phone_screenshot")
+                || "phone_wait".equals(toolName)) {
+            return "无障碍";
+        }
+        return "本机工具";
+    }
+
+    /** 只给界面看的状态事件（模型看不到） */
+    private void emitStatus(String text) {
+        try {
+            JSONObject event = new JSONObject();
+            event.put("type", "status");
+            event.put("text", text);
+            emit(event);
+        } catch (Exception ignored) {
+            // 不会发生
+        }
+    }
+
     private void emit(JSONObject event) {
         emitter.emit(event);
     }
 
     private boolean isDeepseekProvider() {
-        return "deepseek".equals(payload.optString("apiProvider", "deepseek"));
+        return ProviderCompat.supportsServerTools(provider);
     }
 
     private String anthropicBaseUrl() {
-        String configured = payload.optString("apiBaseUrl", "").trim();
-        if (!configured.isEmpty()) {
-            return configured;
+        if (!apiBaseUrl.isEmpty()) {
+            return apiBaseUrl;
         }
         String origin = payload.optString("apiOrigin", "https://api.deepseek.com").trim();
         while (origin.endsWith("/")) {
@@ -571,7 +680,7 @@ public final class AgentRunner {
         }
         Set<String> signatures = new HashSet<>();
         for (ToolCall call : calls) {
-            if (!LocalTools.isParallelSafe(call.name)) {
+            if (call.truncated || !LocalTools.isParallelSafe(call.name)) {
                 return false;
             }
             String signature = call.name + "|" + call.arguments;
@@ -700,11 +809,12 @@ public final class AgentRunner {
             int parallelGroup,
             boolean parallel
     ) throws Exception {
+        String toolText = withSource(call.name, outcome.text);
         JSONObject event = new JSONObject();
         event.put("type", "tool_result");
         event.put("id", call.id);
         event.put("name", call.name);
-        event.put("content", abbreviate(outcome.text, MAX_TOOL_RESULT_CHARS));
+        event.put("content", abbreviate(toolText, MAX_TOOL_RESULT_CHARS));
         event.put("isError", outcome.isError);
         event.put("elapsedMs", outcome.elapsedMs);
         event.put("round", round);
@@ -724,7 +834,7 @@ public final class AgentRunner {
             JSONArray content = new JSONArray();
             JSONObject textBlock = new JSONObject();
             textBlock.put("type", "text");
-            textBlock.put("text", abbreviate(outcome.text, MAX_TOOL_RESULT_CHARS));
+            textBlock.put("text", abbreviate(toolText, MAX_TOOL_RESULT_CHARS));
             content.put(textBlock);
             JSONObject imageBlock = new JSONObject();
             imageBlock.put("type", "image");
@@ -735,7 +845,7 @@ public final class AgentRunner {
             content.put(imageBlock);
             block.put("content", content);
         } else {
-            block.put("content", abbreviate(outcome.text, MAX_TOOL_RESULT_CHARS));
+            block.put("content", abbreviate(toolText, MAX_TOOL_RESULT_CHARS));
         }
         if (outcome.isError) {
             block.put("is_error", true);
@@ -787,6 +897,16 @@ public final class AgentRunner {
     }
 
     /** 连接配置里启用的 MCP Server，拉工具并建立 函数名 → 真实工具 的映射 */
+    private static boolean containsTool(JSONArray tools, String name) {
+        for (int i = 0; i < tools.length(); i++) {
+            JSONObject item = tools.optJSONObject(i);
+            if (item != null && name.equals(item.optString("name"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private JSONArray connectTools() throws Exception {
         JSONArray tools = new JSONArray();
         JSONArray serverIds = payload.optJSONArray("mcpServerIds");
@@ -900,6 +1020,12 @@ public final class AgentRunner {
                 coreCount++;
             }
         }
+        // Shizuku 就绪时把 phone_shell 直接放进核心工具：
+        // 运行时块已经写着「phone_shell 可用」，就不该再让模型先 tool_search 一次才发现它。
+        if (shizukuReady && localCatalog.containsKey("phone_shell") && !containsTool(tools, "phone_shell")) {
+            tools.put(localCatalog.get("phone_shell"));
+            coreCount++;
+        }
         tools.put(toolSearchSpec());
         JSONObject localStatus = new JSONObject();
         localStatus.put("type", "status");
@@ -911,6 +1037,7 @@ public final class AgentRunner {
                 ? "；Shizuku 已就绪（特权命令可用）"
                 : "；Shizuku 未就绪（pm/am/settings 不可用，不影响读屏/点击/命令）");
         statusText.append("；").append(RuntimeTools.statusLine(context));
+        statusText.append("；联网：web_search / web_fetch 已内置（DeepSeek 走官方搜索，其它供应商走网页搜索兜底；web_fetch 原生抓取，不依赖厂商）");
         statusText.append("；文件、设置、剪贴板、zip、docx 与 Python/Node 脚本按需 tool_search 发现");
         localStatus.put("text", statusText.toString());
         emit(localStatus);
@@ -932,7 +1059,7 @@ public final class AgentRunner {
         JSONObject properties = new JSONObject();
         properties.put("query", new JSONObject()
                 .put("type", "string")
-                .put("description", "能力关键词，例如 文件/zip/设置/剪贴板/通知/截图/文档"));
+                .put("description", "能力关键词，例如 文件/zip/设置/剪贴板/通知/截图/网页/文档"));
         properties.put("limit", new JSONObject()
                 .put("type", "number")
                 .put("description", "最多返回几个工具，默认 5，最大 8"));
@@ -940,9 +1067,9 @@ public final class AgentRunner {
                 .put("name", "tool_search")
                 .put("description",
                         "搜索 DLA 的扩展工具目录。核心工具（读屏/截图/点击/输入/看图/本机终端）已经在列表里；"
-                                + "需要文件读写、设置、剪贴板、通知、zip、docx，或 Python/Node 脚本时先搜索"
+                                + "需要文件读写、设置、剪贴板、通知、zip、docx、网页渲染截图，或 Python/Node 脚本时先搜索"
                                 + "（关键词示例：文件/目录/读取/写入、应用、设置、剪贴板、通知、zip、docx、"
-                                + "python/脚本、js/node、搜索/rg）。"
+                                + "python/脚本、js/node、搜索/rg、网页/HTML/截图）。"
                                 + "返回匹配工具的说明和参数，下一轮这些工具会加入可用列表。"
                                 + "搜索不执行任何操作；搜不到就说明当前后端不可用，直接告诉用户缺什么。")
                 .put("input_schema", new JSONObject()
@@ -1196,27 +1323,33 @@ public final class AgentRunner {
         emit(event);
     }
 
+    /** 解析工具参数；返回 null 表示不是完整 JSON（通常是 max_tokens 截断） */
+    private static JSONObject parseArguments(ToolCall call) {
+        if (call.arguments == null || call.arguments.length() == 0) {
+            return new JSONObject();
+        }
+        try {
+            return new JSONObject(call.arguments.toString());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private McpClient.ToolResult executeTool(ToolCall call) throws Exception {
+        JSONObject arguments = parseArguments(call);
+        if (arguments == null) {
+            return new McpClient.ToolResult(TRUNCATED_ARGS_HINT, true);
+        }
         if ("tool_search".equals(call.name)) {
-            JSONObject arguments = call.arguments.length() == 0
-                    ? new JSONObject() : new JSONObject(call.arguments.toString());
             return executeToolSearch(arguments);
         }
         if (RuntimeTools.isRuntime(call.name)) {
-            JSONObject arguments = call.arguments.length() == 0
-                    ? new JSONObject() : new JSONObject(call.arguments.toString());
             return RuntimeTools.execute(context, call.name, arguments);
         }
         if (TaskTools.isTask(call.name)) {
-            JSONObject arguments = call.arguments.length() == 0
-                    ? new JSONObject()
-                    : new JSONObject(call.arguments.toString());
             return executeTaskTool(call.name, arguments);
         }
         if (LocalTools.isLocal(call.name)) {
-            JSONObject arguments = call.arguments.length() == 0
-                    ? new JSONObject()
-                    : new JSONObject(call.arguments.toString());
             LocalTools.Result result = LocalTools.execute(context, call.name, arguments);
             return new McpClient.ToolResult(
                     result.text,
@@ -1226,12 +1359,11 @@ public final class AgentRunner {
             );
         }
         if (WebTools.isWeb(call.name)) {
-            JSONObject arguments = call.arguments.length() == 0
-                    ? new JSONObject()
-                    : new JSONObject(call.arguments.toString());
+            // 供应商要一起传：web_search 在 DeepSeek 端点走官方接口，其它供应商走免费网页搜索
             LocalTools.Result result = WebTools.execute(
                     payload.optString("apiKey"),
                     payload.optString("apiOrigin"),
+                    provider,
                     call.name,
                     arguments
             );
@@ -1245,7 +1377,6 @@ public final class AgentRunner {
         if (client == null) {
             throw new IOException("MCP Server 未连接：" + reference.serverId);
         }
-        JSONObject arguments = call.arguments.length() == 0 ? new JSONObject() : new JSONObject(call.arguments.toString());
         return client.callTool(reference.toolName, arguments);
     }
 
@@ -1262,7 +1393,14 @@ public final class AgentRunner {
             block.put("type", "tool_use");
             block.put("id", call.id);
             block.put("name", call.name);
-            block.put("input", call.arguments.length() == 0 ? new JSONObject() : new JSONObject(call.arguments.toString()));
+            JSONObject input = parseArguments(call);
+            if (input == null) {
+                // 参数被截断：协议要求 input 是对象，这里用空对象占位；
+                // 真正的错误由 tool_result 说明，不能因为一个坏 JSON 结束整轮运行。
+                call.truncated = true;
+                input = new JSONObject();
+            }
+            block.put("input", input);
             content.put(block);
         }
         JSONObject message = new JSONObject();
@@ -1336,15 +1474,26 @@ public final class AgentRunner {
     }
 
     private RoundResult streamRound(JSONArray messages, JSONArray tools) throws Exception {
+        if ("openai".equals(protocol)) {
+            return streamRoundOpenAi(messages, tools);
+        }
         JSONObject body = new JSONObject();
-        body.put("model", payload.optString("model", "deepseek-flash"));
+        String model = payload.optString("model", "deepseek-flash");
+        body.put("model", model);
         body.put("max_tokens", 8192);
         body.put("system", buildSystem());
         body.put("messages", messages);
         body.put("stream", true);
-        body.put("temperature", 1.0);
+        if (!ProviderCompat.omitTemperature(provider, model)) {
+            body.put("temperature", 1.0);
+        }
         if (tools.length() > 0) {
             body.put("tools", tools);
+        }
+        // Anthropic 原生协议下，思考开关是 thinking:{type:…}；只有明确支持的端点才带，
+        // 否则某些「自称 anthropic 兼容」的中转会直接 400。Agent 区默认不开思考。
+        if (ProviderCompat.THINKING_ANTHROPIC.equals(ProviderCompat.thinkingStyle(provider, protocol))) {
+            body.put("thinking", new JSONObject().put("type", "disabled"));
         }
 
         String baseUrl = anthropicBaseUrl();
@@ -1419,6 +1568,198 @@ public final class AgentRunner {
         return result;
     }
 
+    /** OpenAI 兼容端点：{baseUrl}/chat/completions，SSE 也是 data: 行 */
+    private String openAiBaseUrl() {
+        String configured = apiBaseUrl;
+        while (configured.endsWith("/")) {
+            configured = configured.substring(0, configured.length() - 1);
+        }
+        // 有用户把完整地址（…/chat/completions）整段贴进来，这里替他去重
+        if (configured.endsWith("/chat/completions")) {
+            configured = configured.substring(0, configured.length() - "/chat/completions".length());
+        }
+        return configured;
+    }
+
+    private RoundResult streamRoundOpenAi(JSONArray messages, JSONArray tools) throws Exception {
+        RoundResult result = new RoundResult();
+        String model = payload.optString("model", "deepseek-flash");
+        JSONObject body = new JSONObject();
+        body.put("model", model);
+        body.put(ProviderCompat.maxTokensField(provider, model), 8192);
+        body.put("stream", true);
+        // o 系列 / gpt-5 不接受自定义温度，传了直接 400
+        if (!ProviderCompat.omitTemperature(provider, model)) {
+            body.put("temperature", 1.0);
+        }
+        body.put("messages", OpenAiWire.messages(messages, buildSystem()));
+        if (tools.length() > 0) {
+            body.put("tools", OpenAiWire.tools(tools));
+            body.put("tool_choice", "auto");
+        }
+        String baseUrl = openAiBaseUrl();
+        if (ProviderCompat.supportsStreamOptions(provider)) {
+            body.put("stream_options", new JSONObject().put("include_usage", true));
+        }
+
+        URL url = new URL(baseUrl + "/chat/completions");
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod("POST");
+        connection.setDoOutput(true);
+        connection.setConnectTimeout(20000);
+        connection.setReadTimeout(300000);
+        connection.setRequestProperty("Content-Type", "application/json");
+        connection.setRequestProperty("Accept", "text/event-stream");
+        connection.setRequestProperty("Authorization", "Bearer " + payload.optString("apiKey"));
+        activeConnection = connection;
+
+        try (OutputStream out = connection.getOutputStream()) {
+            out.write(body.toString().getBytes(StandardCharsets.UTF_8));
+        }
+        int status = connection.getResponseCode();
+        if (status >= 400) {
+            String text = readAll(connection.getErrorStream());
+            throw new IOException("HTTP " + status + (text.isEmpty() ? "" : "：" + abbreviate(text, 800)));
+        }
+        String contentType = connection.getContentType();
+        if (contentType == null || !contentType.contains("text/event-stream")) {
+            String text = readAll(connection.getInputStream());
+            throw new IOException("服务端没有返回 SSE（" + contentType + "）：" + abbreviate(text, 500));
+        }
+
+        Map<Integer, ToolCall> calls = new HashMap<>();
+        Map<Integer, StringBuilder> arguments = new HashMap<>();
+        String finish = null;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (cancelled) {
+                    throw new CancelledException();
+                }
+                String trimmed = line.trim();
+                if (!trimmed.startsWith("data:")) {
+                    continue;
+                }
+                String data = trimmed.substring(5).trim();
+                if (data.isEmpty()) {
+                    continue;
+                }
+                if ("[DONE]".equals(data)) {
+                    break;
+                }
+                JSONObject chunk;
+                try {
+                    chunk = new JSONObject(data);
+                } catch (Exception ignored) {
+                    continue;
+                }
+                JSONObject usage = chunk.optJSONObject("usage");
+                if (usage != null) {
+                    result.inputTokens = usage.optInt("prompt_tokens", result.inputTokens);
+                    result.outputTokens = usage.optInt("completion_tokens", result.outputTokens);
+                }
+                JSONArray choices = chunk.optJSONArray("choices");
+                if (choices == null || choices.length() == 0) {
+                    continue;
+                }
+                JSONObject choice = choices.optJSONObject(0);
+                if (choice == null) {
+                    continue;
+                }
+                String reason = choice.optString("finish_reason", "");
+                if (!reason.isEmpty()) {
+                    finish = reason;
+                }
+                JSONObject delta = choice.optJSONObject("delta");
+                if (delta == null) {
+                    continue;
+                }
+                String text = delta.optString("content", "");
+                if (!text.isEmpty()) {
+                    if (result.firstTokenAt == 0) {
+                        result.firstTokenAt = SystemClock.elapsedRealtime();
+                    }
+                    result.text.append(text);
+                    emitDelta("text", text);
+                }
+                String thinking = delta.optString("reasoning_content", "");
+                if (thinking.isEmpty()) {
+                    thinking = delta.optString("reasoning", "");
+                }
+                if (!thinking.isEmpty()) {
+                    emitDelta("thinking", thinking);
+                }
+                JSONArray toolCalls = delta.optJSONArray("tool_calls");
+                if (toolCalls == null) {
+                    continue;
+                }
+                for (int i = 0; i < toolCalls.length(); i++) {
+                    JSONObject item = toolCalls.optJSONObject(i);
+                    if (item == null) {
+                        continue;
+                    }
+                    int index = item.optInt("index", i);
+                    StringBuilder buffer = arguments.get(index);
+                    if (buffer == null) {
+                        buffer = new StringBuilder();
+                        arguments.put(index, buffer);
+                    }
+                    JSONObject function = item.optJSONObject("function");
+                    String partial = function == null ? "" : function.optString("arguments", "");
+                    if (!partial.isEmpty()) {
+                        buffer.append(partial);
+                    }
+                    String id = item.optString("id", "");
+                    String name = function == null ? "" : function.optString("name", "");
+                    if (calls.get(index) == null && (!id.isEmpty() || !name.isEmpty())) {
+                        ToolCall call = new ToolCall(
+                                id.isEmpty() ? java.util.UUID.randomUUID().toString() : id,
+                                name);
+                        calls.put(index, call);
+                        result.toolCalls.add(call);
+                    }
+                }
+            }
+        } catch (IOException streamError) {
+            if (cancelled) {
+                throw new CancelledException();
+            }
+            throw streamError;
+        } finally {
+            connection.disconnect();
+            activeConnection = null;
+        }
+
+        for (Map.Entry<Integer, ToolCall> entry : calls.entrySet()) {
+            StringBuilder buffer = arguments.get(entry.getKey());
+            if (buffer != null) {
+                entry.getValue().arguments.append(buffer);
+            }
+        }
+        result.stopReason = OpenAiWire.stopReason(finish);
+        emitUsage(result);
+        return result;
+    }
+
+    private void emitDelta(String type, String text) throws Exception {
+        JSONObject event = new JSONObject();
+        event.put("type", type);
+        event.put("delta", text);
+        emit(event);
+    }
+
+    private void emitUsage(RoundResult result) throws Exception {
+        JSONObject event = new JSONObject();
+        event.put("type", "usage");
+        event.put("inputTokens", result.inputTokens);
+        event.put("outputTokens", result.outputTokens);
+        event.put("cacheCreationInputTokens", 0);
+        event.put("cacheReadInputTokens", 0);
+        event.put("elapsedMs", SystemClock.elapsedRealtime() - result.startedAt);
+        event.put("ttftMs", result.firstTokenAt > 0 ? result.firstTokenAt - result.startedAt : 0);
+        emit(event);
+    }
     private void handleEvent(String eventName, String data, RoundResult result, Map<Integer, ToolCall> callsByIndex) throws Exception {
         JSONObject root;
         try {

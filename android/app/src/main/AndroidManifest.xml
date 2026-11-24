@@ -76,6 +76,14 @@
 
         <!-- 15 分钟健康检查（由 AlarmManager 显式触发） -->
         <receiver
+            android:name=".nativeui.WebShotReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.chatdemo.action.WEB_SHOT" />
+            </intent-filter>
+        </receiver>
+        <receiver
             android:name=".agent.HealthReceiver"
             android:enabled="true"
             android:exported="false" />

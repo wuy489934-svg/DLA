@@ -9,7 +9,13 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.widget.Toast
 import android.graphics.drawable.ColorDrawable
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.util.Base64
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -95,6 +101,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -118,10 +125,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -134,10 +143,46 @@ import java.util.Locale
  */
 class NativeShellActivity : ComponentActivity() {
 
+    companion object {
+        /** 主进程当前活着的界面；网页截图要挂到它的窗口里渲染才有画面 */
+        @Volatile
+        var instance: NativeShellActivity? = null
+            private set
+    }
+
+    /** 通知点进来要打开的会话 id（Activity 已在前台时也能收到） */
+    private val sessionRequest = MutableStateFlow<String?>(null)
+
+    private fun consumeSessionIntent(intent: android.content.Intent?) {
+        val id = intent?.getStringExtra(com.example.chatdemo.agent.AgentService.EXTRA_SESSION)
+        if (!id.isNullOrBlank()) {
+            Log.d("DlaAgent", "open session from intent: $id")
+            sessionRequest.value = id
+            // 同一个 Intent 只消费一次，避免 onResume 反复把用户拽回那个会话
+            intent?.removeExtra(com.example.chatdemo.agent.AgentService.EXTRA_SESSION)
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeSessionIntent(intent)
+    }
+
     override fun onResume() {
         super.onResume()
+        instance = this
         // 回到前台重新挂上 Agent 监听器（系统恢复任务时也能收到事件）
         ChatEngine.attachListener()
+        // 后台期间 Agent 可能已经跑完：把 :agent 留下的运行日志认领回来
+        runCatching { ChatEngine.recoverRuns() }
+        // 有些机型点通知只把界面拉到前台、不走 onNewIntent：这里补一次，且幂等
+        consumeSessionIntent(intent)
+    }
+
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -147,6 +192,7 @@ class NativeShellActivity : ComponentActivity() {
         Lang.init(this)
         enableEdgeToEdge()
         ChatEngine.attach(this)
+        consumeSessionIntent(intent)
 
         setContent {
             var themeMode by remember { mutableStateOf(ChatEngine.themeMode) }
@@ -169,9 +215,200 @@ class NativeShellActivity : ComponentActivity() {
                         themeMode = it
                         ChatEngine.themeMode = it
                     },
+                    sessionRequests = sessionRequest,
                 )
             }
         }
+    }
+
+    /**
+     * 在主进程当前窗口里挂一个离屏 WebView，把本地 HTML 渲染成截图。
+     *
+     * 为什么不在 :agent 里做：没有挂到窗口上的 WebView 不会真正渲染，draw 出来是纯黑。
+     * 这里把它 attach 到正在显示的 Activity（放到窗口外，用户看不见），截完立即移除，
+     * 结果通过广播回给 :agent。不弹新界面，也不会把别的应用抢到前台。
+     */
+    fun renderWebShot(
+        requestId: String,
+        path: String,
+        widthPx: Int,
+        heightPx: Int,
+        fullPage: Boolean,
+        waitMs: Int,
+        maxHeightPx: Int,
+    ) {
+        val appContext = applicationContext
+
+        fun reply(ok: Boolean, filePath: String?, error: String?) {
+            WebShotReply.send(appContext, requestId, ok, filePath, error)
+        }
+
+        val file = File(path)
+        if (!file.isFile) {
+            reply(false, null, "HTML 文件不存在：$path")
+            return
+        }
+        val root = findViewById<android.view.ViewGroup>(android.R.id.content)
+        if (root == null) {
+            reply(false, null, "找不到界面容器")
+            return
+        }
+
+        val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+        var web: WebView? = null
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        fun finish(capture: Boolean) {
+            if (!settled.compareAndSet(false, true)) return
+            val view = web ?: return
+            try {
+                if (!capture) {
+                    reply(false, null, "页面加载失败或没有渲染出内容")
+                    return
+                }
+                var height = heightPx
+                if (fullPage) {
+                    val content = view.contentHeight
+                    if (content > 0) {
+                        val scaled = Math.round(content * resources.displayMetrics.density)
+                        height = Math.max(heightPx, Math.min(scaled, maxHeightPx))
+                    }
+                }
+                view.measure(
+                    android.view.View.MeasureSpec.makeMeasureSpec(widthPx, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(height, android.view.View.MeasureSpec.EXACTLY),
+                )
+                view.layout(0, 0, widthPx, height)
+                val bitmap = Bitmap.createBitmap(widthPx, height, Bitmap.Config.ARGB_8888)
+                view.draw(Canvas(bitmap))
+                if (isNearlyBlank(bitmap)) {
+                    bitmap.recycle()
+                    reply(false, null, "页面几乎是空白：可能是动画还没开始、文件内容为空，或页面依赖网络资源")
+                    return
+                }
+                val dir = File("/sdcard/Download/DLA-web-shots")
+                if (!dir.exists()) dir.mkdirs()
+                val target = File(dir, "shot-" + System.currentTimeMillis() + ".jpg")
+                java.io.FileOutputStream(target).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                }
+                bitmap.recycle()
+                reply(true, target.absolutePath, null)
+            } catch (error: Throwable) {
+                reply(false, null, "截图失败：" + error)
+            } finally {
+                runCatching { root.removeView(view) }
+                runCatching { view.destroy() }
+                web = null
+            }
+        }
+
+        try {
+            val view = WebView(this)
+            web = view
+            view.settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                allowFileAccess = true
+                allowContentAccess = false
+                blockNetworkLoads = true
+                useWideViewPort = true
+                loadWithOverviewMode = true
+                setSupportZoom(false)
+            }
+            view.setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+            view.setBackgroundColor(0xFF05060F.toInt())
+            // 放到窗口外：attached 但用户看不见，WebView 仍然会真正渲染
+            view.translationX = -20000f
+            root.addView(view, android.view.ViewGroup.LayoutParams(widthPx, heightPx))
+            view.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(v: WebView, url: String) {
+                    handler.postDelayed({
+                        // 离屏渲染时 CSS 动画的时钟不一定推进，先把动画/过渡"快进"到终态再截
+                        runCatching {
+                            v.evaluateJavascript(
+                                "(function(){try{var s=document.createElement('style');" +
+                                    "s.textContent='*,*::before,*::after{animation:none !important;transition:none !important}';" +
+                                    "if(document.head){document.head.appendChild(s);}}catch(e){}})()",
+                                null,
+                            )
+                        }
+                        handler.postDelayed({ finish(true) }, 180)
+                    }, waitMs.toLong())
+                }
+
+                override fun onReceivedError(
+                    v: WebView,
+                    request: WebResourceRequest?,
+                    error: WebResourceError?,
+                ) {
+                    if (request != null && !request.isForMainFrame) return
+                    finish(false)
+                }
+            }
+            view.loadUrl(file.toURI().toString())
+            // 兜底：页面脚本卡住时也要给模型一张当前画面
+            handler.postDelayed({ finish(true) }, maxOf(4000, waitMs + 3000).toLong())
+        } catch (error: Throwable) {
+            reply(false, null, "WebView 初始化失败：" + error)
+            web?.let { view ->
+                runCatching { root.removeView(view) }
+                runCatching { view.destroy() }
+            }
+            web = null
+        }
+    }
+
+    /** 判断截图是否几乎单色（空白页），避免把纯黑图当成成功结果交给模型 */
+    private fun isNearlyBlank(bitmap: Bitmap): Boolean {
+        val step = 37
+        val first = bitmap.getPixel(0, 0)
+        var different = 0
+        var x = 0
+        while (x < bitmap.width) {
+            var y = 0
+            while (y < bitmap.height) {
+                if (bitmap.getPixel(x, y) != first) different++
+                y += step
+            }
+            x += step
+        }
+        return different < 3
+    }
+}
+
+/** 把页面编码成偏好里的值；空串表示首页 */
+private fun screenKey(screen: Screen): String = when (screen) {
+    Screen.Home -> "home"
+    Screen.Settings -> "settings"
+    Screen.Advanced -> "advanced"
+    is Screen.Chat -> "chat:" + screen.id
+    is Screen.Zone -> "zone:" + screen.mode
+}
+
+/** 反序列化；解析不出来就返回 null（栈里的坏元素会被丢掉） */
+private fun screenFromKey(key: String): Screen? = when {
+    key == "home" -> Screen.Home
+    key == "settings" -> Screen.Settings
+    key == "advanced" -> Screen.Advanced
+    key.startsWith("zone:") -> Screen.Zone(key.removePrefix("zone:"))
+    key.startsWith("chat:") -> key.removePrefix("chat:").takeIf { it.isNotBlank() }?.let { Screen.Chat(it) }
+    else -> null
+}
+
+/** 恢复上次停留的页面：会话还在就回到聊天，否则回对应分区或首页 */
+private fun restoreScreen(): Screen {
+    val raw = ChatEngine.lastScreen
+    return when {
+        raw.startsWith("chat:") -> {
+            val id = raw.removePrefix("chat:")
+            if (ChatEngine.sessionExists(id)) {
+                ChatEngine.open(id)
+                Screen.Chat(id)
+            } else Screen.Home
+        }
+        raw.startsWith("zone:") -> Screen.Zone(raw.removePrefix("zone:"))
+        else -> Screen.Home
     }
 }
 
@@ -188,31 +425,20 @@ private sealed interface Screen {
 }
 
 /**
- * 切语言时会 recreate 本 Activity，用 saved state 记住当前页面，
- * 回来后还停在设置页（同时能看到新语言），而不是被弹回会话列表。
+ * 页面栈（不是单个页面）。
+ *
+ * 之前只存「当前是哪一页」，返回只能一刀切回首页——从会话页进设置，返回就丢了会话。
+ * 现在把整条路径存下来：[首页 → 分区 → 会话 → 设置 → 高级设置]，
+ * 返回就是弹一层，进设置时也不再关掉会话。
+ *
+ * 冷启动恢复时只有一层（聊天或分区），所以「返回」还要有兜底：
+ * - 直接进会话的，返回补一个同 mode 的分区当上一级；
+ * - 直接进分区的，返回回首页。
  */
-private val ScreenSaver: Saver<Screen, String> = Saver(
-    save = { screen ->
-        when (screen) {
-            Screen.Home -> "home"
-            Screen.Settings -> "settings"
-            Screen.Advanced -> "advanced"
-            is Screen.Zone -> "zone:" + screen.mode
-            is Screen.Chat -> "chat:" + screen.id
-        }
-    },
-    restore = { value ->
-        when {
-            value == "settings" -> Screen.Settings
-            value == "advanced" -> Screen.Advanced
-            value.startsWith("zone:") -> Screen.Zone(value.removePrefix("zone:"))
-            value.startsWith("chat:") -> {
-                val id = value.removePrefix("chat:")
-                // 进程被杀后恢复时没有打开的会话，回首页，避免空白聊天页
-                if (ChatEngine.open.value?.id == id) Screen.Chat(id) else Screen.Home
-            }
-            else -> Screen.Home
-        }
+private val StackSaver = listSaver<List<Screen>, String>(
+    save = { stack -> stack.map { screenKey(it) } },
+    restore = { keys ->
+        keys.mapNotNull { screenFromKey(it) }.ifEmpty { listOf(Screen.Home) }
     },
 )
 
@@ -220,70 +446,126 @@ private val ScreenSaver: Saver<Screen, String> = Saver(
 private fun NativeApp(
     themeMode: String,
     onThemeMode: (String) -> Unit,
+    sessionRequests: kotlinx.coroutines.flow.MutableStateFlow<String?>? = null,
 ) {
-    var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen>(Screen.Home) }
+    // 冷启动时恢复上次停留的页面（会话/分区），不必重新点一遍
+    var stack by rememberSaveable(stateSaver = StackSaver) {
+        mutableStateOf(listOf(restoreScreen()))
+    }
+    val screen = stack.last()
     val sessions by ChatEngine.sessions.collectAsState()
     val open by ChatEngine.open.collectAsState()
+    val context = LocalContext.current
 
-    LaunchedEffect(screen) {
-        if (screen is Screen.Home || screen is Screen.Zone) ChatEngine.refresh()
+    fun push(next: Screen) {
+        if (stack.last() == next) return
+        stack = stack + next
     }
 
-    // 从聊天页退出：回到这个会话所属的分区，而不是混排的首页
-    fun leaveChatToZone() {
-        val mode = ChatEngine.open.value?.mode ?: "llm"
-        ChatEngine.close()
-        screen = Screen.Zone(mode)
+    /** 返回上一级：会话页要顺手关掉会话；栈底兜底到分区/首页 */
+    fun goBack() {
+        val current = stack.last()
+        if (current is Screen.Chat) {
+            val mode = ChatEngine.open.value?.mode ?: "agent"
+            ChatEngine.close()
+            stack = if (stack.size >= 2 && stack[stack.size - 2] is Screen.Zone) {
+                stack.dropLast(1)
+            } else {
+                listOf(Screen.Zone(mode))
+            }
+            return
+        }
+        if (stack.size >= 2) {
+            stack = stack.dropLast(1)
+            return
+        }
+        // 冷启动直接落在分区页：返回回首页
+        stack = listOf(Screen.Home)
     }
 
-    BackHandler(enabled = screen !is Screen.Home) {
-        when (screen) {
-            is Screen.Chat -> leaveChatToZone()
-            else -> {
-                ChatEngine.close()
-                screen = Screen.Home
+    val canGoBack = stack.size > 1 || screen is Screen.Chat
+
+    // 点通知进来：直接落到那条任务所在的会话（上一级补成分区）
+    val requestedSession by (sessionRequests ?: remember { MutableStateFlow<String?>(null) })
+        .collectAsState()
+    LaunchedEffect(requestedSession) {
+        val id = requestedSession ?: return@LaunchedEffect
+        Log.d("DlaAgent", "session request: $id exists=${ChatEngine.sessionExists(id)}")
+        if (ChatEngine.sessionExists(id)) {
+            ChatEngine.open(id)
+            val mode = ChatEngine.open.value?.mode ?: "agent"
+            stack = listOf(Screen.Zone(mode), Screen.Chat(id))
+        }
+        sessionRequests?.value = null
+    }
+
+    // 通知权限：Android 13+ 第一次使用时就问一次；之后在设置页里可以再授权
+    var notifGranted by remember { mutableStateOf(ChatEngine.canPostNotifications()) }
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        notifGranted = granted
+    }
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 && !ChatEngine.canPostNotifications()) {
+            val prefs = context.getSharedPreferences("dla-native", Context.MODE_PRIVATE)
+            if (!prefs.getBoolean("notifAsked", false)) {
+                prefs.edit().putBoolean("notifAsked", true).apply()
+                runCatching {
+                    notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
         }
     }
 
-    Crossfade(targetState = screen, animationSpec = tween(220), label = "screen") { current ->
-        when (current) {
-            is Screen.Home -> HomeScreen(
-                sessions = sessions,
-                onOpenZone = { mode -> screen = Screen.Zone(mode) },
-                onSettings = { screen = Screen.Settings },
-            )
-            is Screen.Zone -> ZoneScreen(
-                mode = current.mode,
-                sessions = sessions.filter { it.mode == current.mode },
-                onBack = { screen = Screen.Home },
-                onSettings = { screen = Screen.Settings },
-                onOpen = { id ->
-                    ChatEngine.open(id)
-                    screen = Screen.Chat(id)
-                },
-                onDelete = { ChatEngine.delete(it) },
-                onNew = {
-                    ChatEngine.create(current.mode)
-                    ChatEngine.open.value?.id?.let { screen = Screen.Chat(it) }
-                },
-            )
-            is Screen.Chat -> ChatScreen(
-                onBack = { leaveChatToZone() },
-                onSettings = { screen = Screen.Settings },
-            )
-            is Screen.Settings -> SettingsScreen(
-                onBack = {
-                    ChatEngine.close()
-                    screen = Screen.Home
-                },
-                onAdvanced = { screen = Screen.Advanced },
-                themeMode = themeMode,
-                onThemeMode = onThemeMode,
-            )
-            is Screen.Advanced -> AdvancedSettingsScreen(
-                onBack = { screen = Screen.Settings },
-            )
+    LaunchedEffect(stack) {
+        if (screen is Screen.Home || screen is Screen.Zone) ChatEngine.refresh()
+        // 只记「基础页」：设置/高级设置是弹层，重启后应该回到它下面的那一页
+        val base = stack.lastOrNull { it !is Screen.Settings && it !is Screen.Advanced } ?: Screen.Home
+        ChatEngine.lastScreen = screenKey(base)
+    }
+
+    BackHandler(enabled = canGoBack) { goBack() }
+
+    // 点击处冒出破碎的小方块（只观察指针、不抢点击），配合 SoundFeedback 的短促点击音
+    ShatterHost(colors = listOf(DlaColors.Mint, DlaColors.Warm, DlaColors.Text)) {
+        Crossfade(targetState = screen, animationSpec = tween(220), label = "screen") { current ->
+            when (current) {
+                is Screen.Home -> HomeScreen(
+                    sessions = sessions,
+                    onOpenZone = { mode -> push(Screen.Zone(mode)) },
+                    onSettings = { push(Screen.Settings) },
+                )
+                is Screen.Zone -> ZoneScreen(
+                    mode = current.mode,
+                    sessions = sessions.filter { it.mode == current.mode },
+                    onBack = { goBack() },
+                    onSettings = { push(Screen.Settings) },
+                    onOpen = { id ->
+                        ChatEngine.open(id)
+                        push(Screen.Chat(id))
+                    },
+                    onDelete = { ChatEngine.delete(it) },
+                    onNew = {
+                        ChatEngine.create(current.mode)
+                        ChatEngine.open.value?.id?.let { push(Screen.Chat(it)) }
+                    },
+                )
+                is Screen.Chat -> ChatScreen(
+                    onBack = { goBack() },
+                    onSettings = { push(Screen.Settings) },
+                )
+                is Screen.Settings -> SettingsScreen(
+                    // 从会话页进设置：返回要回到会话，不能关掉会话、更不能弹回首页
+                    onBack = { goBack() },
+                    onAdvanced = { push(Screen.Advanced) },
+                    themeMode = themeMode,
+                    onThemeMode = onThemeMode,
+                )
+                is Screen.Advanced -> AdvancedSettingsScreen(
+                    onBack = { goBack() },
+                )
+            }
         }
     }
 
@@ -1284,7 +1566,8 @@ private fun TypingDots() {
 
 @Composable
 private fun ThinkingCard(text: String, seconds: Double?) {
-    var expanded by remember(text) { mutableStateOf(false) }
+    // 不能以 text 做 key：流式时每个 token 都会重置展开状态，卡片会自己合拢
+    var expanded by remember { mutableStateOf(false) }
     // 「思考中」= 还没有落定秒数，且流式仍在进行（busy 只在请求开始/结束时翻转，
     // 不会随每个 token 触发重组）。只有这段时间跑动画。
     val busy by ChatEngine.busy.collectAsState()
@@ -1484,6 +1767,7 @@ private fun ConversationSettings() {
         SettingSwitch(Lang.t("界面音效"), sound) {
             sound = it
             ChatEngine.soundEnabled = it
+            SoundFeedback.syncEnabled()
             if (it) SoundFeedback.send()
         }
         var location by remember { mutableStateOf(ChatEngine.location) }
@@ -1498,6 +1782,73 @@ private fun ConversationSettings() {
             Text(Lang.t("保存地区"), color = DlaColors.Mint)
         }
     }
+}
+
+/**
+ * 任务通知：Agent 完成 / 失败 / 停止时提醒。
+ *
+ * Android 13+ 需要 POST_NOTIFICATIONS：这里给「授权通知权限」入口，
+ * 已授权时只显示状态；被拒绝时按钮会跳到系统应用通知设置。
+ */
+@Composable
+private fun NotificationSettings() {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(ChatEngine.notifyResult) }
+    var granted by remember { mutableStateOf(ChatEngine.canPostNotifications()) }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted = it }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingSwitch(Lang.t("任务通知（完成 / 失败时提醒）"), enabled) {
+            enabled = it
+            ChatEngine.notifyResult = it
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                if (granted) {
+                    Lang.t("通知权限：已开启")
+                } else {
+                    Lang.t("通知权限：未开启（收不到任务提醒）")
+                },
+                color = if (granted) DlaColors.TextDim else DlaColors.Warm,
+                fontSize = 11.sp,
+                modifier = Modifier.weight(1f),
+            )
+            if (!granted) {
+                TextButton(onClick = {
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        launcher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        openNotificationSettings(context)
+                    }
+                }) {
+                    Text(Lang.t("授权通知权限"), color = DlaColors.Mint)
+                }
+            }
+        }
+        Text(
+            Lang.t("通知里会带上结论摘要、轮/步、耗时与最后调用的工具；点一下直接回到那个会话。"),
+            color = DlaColors.TextDim,
+            fontSize = 10.sp,
+            lineHeight = 15.sp,
+        )
+    }
+}
+
+/** 系统禁止后再要权限就不会弹了，只能把用户送到系统的通知设置页 */
+private fun openNotificationSettings(context: Context) {
+    val intent = if (android.os.Build.VERSION.SDK_INT >= 26) {
+        Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+    } else {
+        Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(android.net.Uri.parse("package:" + context.packageName))
+    }
+    runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
 @Composable
@@ -2141,6 +2492,16 @@ private fun SettingsScreen(
     var key by remember { mutableStateOf(ChatEngine.apiKey) }
     var base by remember { mutableStateOf(ChatEngine.baseUrl) }
     var model by remember { mutableStateOf(ChatEngine.model) }
+    var protocol by remember { mutableStateOf(ChatEngine.protocol) }
+    // 供应商：空串 = 自动识别（按 Base URL / 模型名猜），选中预设则写死
+    var provider by remember { mutableStateOf(ChatEngine.provider) }
+    // 拉取到的模型列表：存偏好里，重进设置页还能挑，不用再拉一遍
+    var models by remember { mutableStateOf(ChatEngine.cachedModels) }
+    var showModelPicker by remember { mutableStateOf(false) }
+    // 「自动识别」用：输入一变就重算，不需要手动点
+    val activeProvider = provider.ifBlank {
+        com.example.chatdemo.agent.ProviderCompat.detect(base, model, protocol)
+    }
     var saved by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf("") }
@@ -2192,12 +2553,87 @@ private fun SettingsScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = model,
-                    onValueChange = { model = it; saved = false },
-                    label = { Text(Lang.t("模型（留空用默认）")) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                // 供应商预设：一键把协议 / Base URL / 默认模型填好。
+                // 认不出是哪家的中转站，就选「自定义 / 中转站」，只填 Base URL。
+                Text(Lang.t("供应商预设"), color = DlaColors.TextDim, fontSize = 11.sp)
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val presets = com.example.chatdemo.agent.ProviderCompat.presets()
+                    for (i in 0 until presets.length()) {
+                        val item = presets.optJSONObject(i) ?: continue
+                        val id = item.optString("id")
+                        ThemeChip(label = item.optString("name"), active = provider == id) {
+                            provider = id
+                            protocol = item.optString("protocol", "openai")
+                            val presetBase = item.optString("baseUrl")
+                            if (presetBase.isNotBlank()) base = presetBase
+                            val presetModel = item.optString("model")
+                            if (presetModel.isNotBlank()) model = presetModel
+                            saved = false
+                        }
+                    }
+                }
+                Text(
+                    buildString {
+                        append(Lang.t("当前适配："))
+                        append(com.example.chatdemo.agent.ProviderCompat.displayName(activeProvider))
+                        if (provider.isBlank()) {
+                            append("（").append(Lang.t("按 Base URL / 模型名自动识别")).append("）")
+                        }
+                        val note = providerNote(activeProvider)
+                        if (note.isNotBlank()) append(" · ").append(note)
+                    },
+                    color = DlaColors.TextDim,
+                    fontSize = 10.sp,
+                    lineHeight = 15.sp,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = { model = it; saved = false },
+                        label = { Text(Lang.t("模型")) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (models.isNotEmpty()) {
+                        TextButton(onClick = { showModelPicker = true }) {
+                            Text(Lang.t("选择"), color = DlaColors.Warm)
+                        }
+                    }
+                }
+                if (models.isNotEmpty()) {
+                    Text(
+                        Lang.t("已缓存 %d 个模型，点「选择」直接挑", models.size),
+                        color = DlaColors.TextDim,
+                        fontSize = 10.sp,
+                    )
+                }
+                Text(
+                    Lang.t("接口协议"),
+                    color = DlaColors.TextDim,
+                    fontSize = 11.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ThemeChip(
+                        label = Lang.t("Anthropic Messages"),
+                        active = protocol == "anthropic",
+                    ) { protocol = "anthropic" }
+                    ThemeChip(
+                        label = Lang.t("OpenAI Chat Completions"),
+                        active = protocol == "openai",
+                    ) { protocol = "openai" }
+                }
+                Text(
+                    if (protocol == "openai") {
+                        Lang.t("OpenAI 协议：Base URL 通常以 /v1 结尾，例如 https://api.deepseek.com/v1 或 https://api.openai.com/v1")
+                    } else {
+                        Lang.t("Anthropic 协议：Base URL 通常以 /v1 结尾，例如 https://api.deepseek.com/anthropic/v1")
+                    },
+                    color = DlaColors.TextDim,
+                    fontSize = 10.sp,
+                    lineHeight = 15.sp,
                 )
                 Text(
                     Lang.t("上下文窗口（Agent 区用量条用）"),
@@ -2220,6 +2656,9 @@ private fun SettingsScreen(
                         ChatEngine.apiKey = key
                         if (base.isNotBlank()) ChatEngine.baseUrl = base
                         if (model.isNotBlank()) ChatEngine.model = model
+                        ChatEngine.protocol = protocol
+                        ChatEngine.provider = provider
+                        if (models.isNotEmpty()) ChatEngine.cachedModels = models
                         saved = true
                     }) { Text(Lang.t("保存"), color = DlaColors.Mint) }
                     TextButton(
@@ -2228,13 +2667,20 @@ private fun SettingsScreen(
                             if (base.isNotBlank()) ChatEngine.baseUrl = base
                             testing = true
                             testResult = ""
+                            val protocolNow = protocol
                             scope.launch {
                                 val r = withContext(Dispatchers.IO) {
-                                    NativeApi.fetchModels(ChatEngine.apiKey, ChatEngine.baseUrl)
+                                    NativeApi.fetchModels(ChatEngine.apiKey, ChatEngine.baseUrl, protocolNow)
                                 }
                                 testResult = r.message
                                 testOk = r.ok
                                 testing = false
+                                // 拉取成功后立刻把列表留在界面上，直接可挑
+                                if (r.ok && r.models.isNotEmpty()) {
+                                    models = r.models
+                                    ChatEngine.cachedModels = r.models
+                                    if (model.isBlank()) showModelPicker = true
+                                }
                             }
                         },
                         enabled = !testing,
@@ -2247,6 +2693,14 @@ private fun SettingsScreen(
                         color = if (testOk) DlaColors.Mint else DlaColors.Error,
                         fontSize = 11.sp,
                     )
+                }
+                if (models.isNotEmpty()) {
+                    TextButton(onClick = { showModelPicker = true }) {
+                        Text(
+                            Lang.t("从 %d 个模型里挑一个", models.size),
+                            color = DlaColors.Mint,
+                        )
+                    }
                 }
             }
 
@@ -2271,6 +2725,10 @@ private fun SettingsScreen(
                 ConversationSettings()
             }
 
+            SettingsSection(Lang.t("通知"), Lang.t("任务完成 / 失败提醒")) {
+                NotificationSettings()
+            }
+
             SettingsSection(Lang.t("朗读"), Lang.t("默认关闭 · 系统语音 / Qwen3-TTS")) {
                 TtsSettings()
             }
@@ -2291,6 +2749,117 @@ private fun SettingsScreen(
                 fontSize = 11.sp,
                 lineHeight = 17.sp,
             )
+        }
+    }
+
+    // 模型选择：拉取成功后才能挑，省得手打一长串模型 id（还容易打错）
+    if (showModelPicker) {
+        ModelPickerDialog(
+            models = models,
+            current = model,
+            onPick = { picked ->
+                model = picked
+                ChatEngine.apiKey = key
+                if (base.isNotBlank()) ChatEngine.baseUrl = base
+                ChatEngine.model = picked
+                ChatEngine.protocol = protocol
+                ChatEngine.provider = provider
+                saved = true
+                showModelPicker = false
+            },
+            onDismiss = { showModelPicker = false },
+        )
+    }
+}
+
+/** 预设里的那句「这家的坑」提示；没有就返回空串 */
+private fun providerNote(id: String): String {
+    val presets = com.example.chatdemo.agent.ProviderCompat.presets()
+    for (i in 0 until presets.length()) {
+        val item = presets.optJSONObject(i) ?: continue
+        if (item.optString("id") == id) return item.optString("note")
+    }
+    return ""
+}
+
+/**
+ * 模型选择弹窗：带搜索框的列表。
+ *
+ * 为什么不直接用下拉菜单：一家中转站动辄几十个模型，下拉一屏放不下、也不好搜；
+ * 这里给一个可搜索的全屏列表，点一下即选中并保存。
+ */
+@Composable
+private fun ModelPickerDialog(
+    models: List<String>,
+    current: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var filter by remember { mutableStateOf("") }
+    val shown = remember(models, filter) {
+        if (filter.isBlank()) models else models.filter { it.contains(filter, ignoreCase = true) }
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            color = DlaColors.SurfaceHigh,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .fillMaxHeight(0.82f),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+            ) {
+                Text(
+                    Lang.t("选择模型"),
+                    color = DlaColors.Text,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = filter,
+                    onValueChange = { filter = it },
+                    label = { Text(Lang.t("搜索模型")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    Lang.t("共 %d 个，点一下即选中并保存", shown.size),
+                    color = DlaColors.TextDim,
+                    fontSize = 11.sp,
+                )
+                Spacer(Modifier.height(6.dp))
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(shown, key = { it }) { name ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(name) }
+                                .padding(vertical = 11.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                name,
+                                color = if (name == current) DlaColors.Mint else DlaColors.Text,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (name == current) {
+                                Text("✓", color = DlaColors.Mint, fontSize = 13.sp)
+                            }
+                        }
+                        HorizontalDivider(color = DlaColors.Line)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text(Lang.t("取消"), color = DlaColors.TextDim)
+                }
+            }
         }
     }
 }

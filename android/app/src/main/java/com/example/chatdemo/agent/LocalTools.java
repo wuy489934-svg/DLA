@@ -301,6 +301,7 @@ public final class LocalTools {
                         + "看完图再回答，不要凭文件名猜内容。",
                 schema(props("path", p("string", "图片绝对路径，例如 /sdcard/DCIM/Camera/a.jpg")), "path")
         ));
+        list.put(WebShot.spec());
         list.put(tool(
                 "phone_device",
                 "读取设备型号、系统版本、屏幕分辨率、电池和存储信息。",
@@ -690,6 +691,9 @@ public final class LocalTools {
                         return fail("path 不能为空");
                     }
                     return viewImage(path);
+                }
+                case WebShot.NAME: {
+                    return WebShot.execute(context, arguments);
                 }
                 case "phone_device": {
                     java.util.Locale locale = java.util.Locale.US;

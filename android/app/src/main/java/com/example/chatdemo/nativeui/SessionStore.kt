@@ -239,6 +239,8 @@ class SessionStore(context: Context) {
         status: String,
         mode: String = "llm",
         usage: UsageStats? = null,
+        /** 这一轮的运行 id：界面重启后认领日志时用来去重，避免同一条回答补两次 */
+        runId: String? = null,
     ) {
         ensure(sessionId, mode)
         val json = read(sessionId) ?: return
@@ -263,15 +265,15 @@ class SessionStore(context: Context) {
         if (text.isNotBlank()) {
             blocks.put(JSONObject().put("type", "text").put("text", text))
         }
-        messages.put(
-            JSONObject()
-                .put("id", UUID.randomUUID().toString())
-                .put("role", "assistant")
-                .put("blocks", blocks)
-                .put("status", status)
-                .put("elapsedMs", usage?.turnMs ?: 0L)
-                .put("createdAt", System.currentTimeMillis())
-        )
+        val message = JSONObject()
+            .put("id", UUID.randomUUID().toString())
+            .put("role", "assistant")
+            .put("blocks", blocks)
+            .put("status", status)
+            .put("elapsedMs", usage?.turnMs ?: 0L)
+            .put("createdAt", System.currentTimeMillis())
+        if (!runId.isNullOrBlank()) message.put("runId", runId)
+        messages.put(message)
         // 用量落到会话文件：重开会话时用量条 / 「本轮」耗时还能显示上一次的值
         if (usage != null) {
             json.put(
@@ -289,6 +291,22 @@ class SessionStore(context: Context) {
 
     fun delete(sessionId: String) {
         File(nativeDir, "$sessionId.json").delete()
+    }
+
+    /**
+     * 这一轮运行（runId）是不是已经写进会话了。
+     *
+     * 界面重启后可能同时走两条路（实时事件 + 日志认领），这条判断保证同一条回答只落一次。
+     */
+    fun hasRun(sessionId: String, runId: String): Boolean {
+        if (runId.isBlank()) return false
+        val json = read(sessionId) ?: return false
+        val messages = json.optJSONArray("messages") ?: return false
+        for (i in 0 until messages.length()) {
+            val item = messages.optJSONObject(i) ?: continue
+            if (runId == item.optString("runId")) return true
+        }
+        return false
     }
 
     /** 供 Agent 运行时读取历史（只回传用户与助手的纯文本） */

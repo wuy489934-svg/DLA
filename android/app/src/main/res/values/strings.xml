@@ -15,6 +15,11 @@
     <string name="agent_notification_title">Agent 正在执行任务</string>
     <string name="agent_notification_text">切到后台也会继续，完成后回到应用查看结果</string>
     <string name="agent_notification_stop">停止任务</string>
+    <string name="agent_result_channel_name">任务通知</string>
+    <string name="agent_result_channel_description">Agent 任务完成、失败或停止时提醒，点一下回到会话</string>
+    <string name="agent_result_done_title">任务完成</string>
+    <string name="agent_result_error_title">任务失败</string>
+    <string name="agent_result_stopped_title">任务已停止</string>
     <string name="accessibility_description">让 Agent 在进程内读取当前屏幕控件，用于自动化操作</string>
     <string name="shizuku_granted">Shizuku 权限已授予</string>
     <string name="shizuku_denied">Shizuku 权限被拒绝</string>

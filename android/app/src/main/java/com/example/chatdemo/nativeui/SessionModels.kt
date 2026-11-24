@@ -57,6 +57,8 @@ data class ChatMessage(
     val attachments: List<Attachment> = emptyList(),
     /** 这一轮从开始到结束的实际耗时（助手消息落盘时记录） */
     val elapsedMs: Long = 0L,
+    /** Agent 运行 id：界面重启后认领日志时用来去重 */
+    val runId: String? = null,
 )
 
 /** 一条附件：图片走 data URL，文本类文档直接带正文 */
@@ -245,6 +247,7 @@ object SessionParser {
             model = if (json.isNull("model")) null else json.optString("model").ifEmpty { null },
             attachments = attachments(json),
             elapsedMs = json.optLong("elapsedMs", 0L),
+            runId = if (json.isNull("runId")) null else json.optString("runId").ifEmpty { null },
         )
     }
 

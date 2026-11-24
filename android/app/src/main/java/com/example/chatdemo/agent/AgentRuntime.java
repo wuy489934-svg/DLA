@@ -43,6 +43,8 @@ public final class AgentRuntime {
     private Context appContext;
     private PowerManager.WakeLock wakeLock;
     private boolean preserveCheckpoint;
+    /** 本轮运行的日志账本；界面进程死了也能在下次启动时把回答补回去 */
+    private volatile AgentRunJournal journal;
     private static final long WAKE_IDLE_MS = BuildConfig.DEBUG ? 20_000L : 5 * 60 * 1000L;
     private final Runnable wakeLockRelease = this::releaseWakeLock;
 
@@ -87,6 +89,10 @@ public final class AgentRuntime {
             AgentCheckpoint.clearTaskState(appContext);
         }
         AgentCheckpoint.save(appContext, id, payloadJson);
+        // 有会话 id 才值得记账：这样界面即使中途被杀，回来也能把这轮补回来
+        if (!payload.optString("sessionId", "").isEmpty()) {
+            journal = AgentRunJournal.begin(context, id, payload);
+        }
         AgentKeepAlive.scheduleHealth(appContext);
         try {
             AgentService.start(context);
@@ -230,6 +236,11 @@ public final class AgentRuntime {
         if ("task_state".equals(event.optString("type")) && appContext != null) {
             AgentCheckpoint.saveTaskState(appContext, event);
         }
+        AgentRunJournal currentJournal = journal;
+        if (currentJournal != null) {
+            // 先记账再推给界面：界面随时可能被系统杀掉，账本不能等
+            currentJournal.onEvent(event);
+        }
         synchronized (this) {
             buffer.add(event);
             while (buffer.size() > MAX_BUFFER) {
@@ -274,6 +285,22 @@ public final class AgentRuntime {
 
     private void finish() {
         releaseWakeLock();
+        AgentRunJournal currentJournal;
+        synchronized (this) {
+            currentJournal = journal;
+            journal = null;
+        }
+        if (currentJournal != null) {
+            // 终态（done / error / stopped）已经由事件流过；这里兜底写一次并通知界面
+            currentJournal.finish(null);
+        }
+        if (currentJournal != null && appContext != null && !preserveCheckpoint) {
+            notifyResult(currentJournal);
+        }
+        if (appContext != null) {
+            // 结果通知已经发出，常驻的「正在执行任务」就该撤了
+            AgentService.clearProgress(appContext);
+        }
         if (appContext != null) {
             if (preserveCheckpoint) {
                 AgentKeepAlive.scheduleHealth(appContext);
@@ -289,6 +316,76 @@ public final class AgentRuntime {
             runner = null;
             worker = null;
         }
+    }
+
+    /**
+     * 任务结束通知：标题区分完成 / 失败 / 停止，正文给结论预览，
+     * 展开后能看到「轮 / 步 / 耗时 / 最后工具」，点一下直接回到那个会话。
+     */
+    private void notifyResult(AgentRunJournal run) {
+        Context context = appContext;
+        if (context == null) return;
+        try {
+            String status = run.status();
+            boolean isError = "error".equals(status);
+            boolean isStopped = "stopped".equals(status);
+            int titleRes = isError
+                    ? com.example.chatdemo.R.string.agent_result_error_title
+                    : (isStopped
+                    ? com.example.chatdemo.R.string.agent_result_stopped_title
+                    : com.example.chatdemo.R.string.agent_result_done_title);
+            String title = context.getString(titleRes);
+            String preview = run.previewText(120);
+            String error = run.errorText();
+            if (preview.isEmpty() && !error.isEmpty()) {
+                preview = error;
+            }
+            if (preview.isEmpty()) {
+                preview = isStopped ? "任务已停止（没有产生回复）" : "（没有正文输出）";
+            }
+            StringBuilder stats = new StringBuilder();
+            int rounds = run.rounds();
+            int steps = run.toolCount();
+            if (rounds > 0 || steps > 0) {
+                stats.append(rounds > 0 ? rounds + " 轮 " : "").append(steps).append(" 步");
+            }
+            long elapsed = run.elapsedMs();
+            if (elapsed > 0) {
+                if (stats.length() > 0) stats.append(" · ");
+                stats.append(formatElapsed(elapsed));
+            }
+            String lastTool = run.lastToolName();
+            if (!lastTool.isEmpty()) {
+                if (stats.length() > 0) stats.append(" · ");
+                stats.append("最后 ").append(lastTool);
+            }
+            String body = stats.length() == 0 ? preview : preview + "\n" + stats;
+            StringBuilder big = new StringBuilder(preview);
+            if (stats.length() > 0) {
+                big.append("\n\n").append(stats);
+            }
+            if (isError && !error.isEmpty()) {
+                big.append("\n\n原因：").append(error);
+            }
+            AgentService.notifyResult(
+                    context,
+                    run.sessionId(),
+                    status,
+                    title,
+                    body,
+                    big.toString()
+            );
+        } catch (Throwable error) {
+            android.util.Log.w("AgentRuntime", "notifyResult failed: " + error);
+        }
+    }
+
+    private static String formatElapsed(long millis) {
+        if (millis < 1000) return millis + "ms";
+        if (millis < 60_000) return String.format(java.util.Locale.US, "%.1fs", millis / 1000.0);
+        long minutes = millis / 60_000;
+        long seconds = (millis % 60_000) / 1000;
+        return minutes + "m " + seconds + "s";
     }
 
     /** 有事件/任务时持有唤醒锁；5 分钟无事件自动释放，系统硬超时 6 分钟兜底 */

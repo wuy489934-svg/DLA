@@ -16,4 +16,10 @@
     <string name="shizuku_granted">Shizuku permission granted</string>
     <string name="shizuku_denied">Shizuku permission denied</string>
     <string name="shizuku_not_installed">Shizuku is not installed</string>
+    <string name="agent_notification_stop">Stop task</string>
+    <string name="agent_result_channel_name">Task notifications</string>
+    <string name="agent_result_channel_description">Alerts when an Agent task finishes, fails or stops; tap to open that session</string>
+    <string name="agent_result_done_title">Task finished</string>
+    <string name="agent_result_error_title">Task failed</string>
+    <string name="agent_result_stopped_title">Task stopped</string>
 </resources>

@@ -1,5 +1,101 @@
 # Changelog
 
+## 3.5.0
+
+- **One loop, two wire protocols.** The LLM and Agent areas can talk either Anthropic
+  Messages (DeepSeek `/anthropic/v1`, Claude) or OpenAI Chat Completions
+  (`/v1/chat/completions`: GPT, Qwen, GLM, Kimi, OpenRouter, Ollama …); a switch in
+  Settings picks the dialect and moves the base URL between the two paths. Messages keep
+  the internal block shape and `OpenAiWire` lowers them to `role:tool` / `tool_calls` /
+  `image_url` right before the request, so adding a vendor no longer means touching the
+  agent loop.
+- **A provider adapter instead of per-vendor forks.** `ProviderCompat` ships 12 one-tap
+  presets (DeepSeek, DeepSeek over OpenAI, Qwen / Bailian, Kimi, GLM, OpenAI, Claude,
+  OpenRouter, SiliconFlow, Groq, Ollama, custom), detects the vendor from the base URL
+  or the model name, and applies the quirks that actually differ: `max_tokens` vs
+  `max_completion_tokens`, when `stream_options` may be sent, omitting `temperature` for
+  o-series / gpt-5, the `thinking` / `enable_thinking` / `reasoning_effort` switch, and
+  server-side web tools only on the DeepSeek endpoint. Non-DeepSeek endpoints get a
+  neutral identity prompt instead of claiming to be DeepSeek.
+- **Pick the model you just fetched.** “Fetch and test connection” now keeps the returned
+  list; Settings shows “pick one of N models” with a search box, and the list is cached
+  so it can be reused without fetching again.
+- **A finished run is never lost with the UI process.** `:agent` journals each run to
+  `files/agent-runs/<requestId>.json` (text, thinking, tool cards, usage, task state;
+  writes throttled to one per 700 ms) and broadcasts when it reaches a terminal state.
+  If the UI was killed, the next launch claims the journal and restores the answer —
+  tool cards included — and assistant messages carry a `runId`, so a live event and a
+  recovered journal cannot write the same answer twice.
+- **Output limits became recoverable instead of fatal.** A tool call whose arguments
+  were cut by `max_tokens` is marked truncated, not executed, and answered with a hint
+  that teaches `phone_write` + `phone_append` in ≤3000-character chunks while the round
+  continues. A reply that ends on `max_tokens` with no tool call is appended as an
+  assistant message plus a “continue from where you stopped” nudge, up to 3 times, with
+  a status event each time.
+- **`phone_web_shot`: look at the page before shipping it.** The agent can render a local
+  HTML file off-screen inside DLA's own window and get the screenshot back as an image
+  block, so it can check its own CSS / layout / canvas work and fix what it sees.
+  Rendering happens in the UI process (a WebView with no window draws black) through the
+  `WebShotReceiver` bridge; shots land in `/sdcard/Download/DLA-web-shots/`, and the tool
+  refuses with a clear error when DLA is not in the foreground.
+- **Web tools no longer depend on the vendor.** `web_fetch` is a native HTTP fetcher
+  (desktop UA, gzip, redirects capped at 4 requests, 24 000 characters and 3 MB caps,
+  a localhost / private-prefix guard), so it works with any provider. `web_search` keeps the official
+  DeepSeek endpoint when the provider is DeepSeek and otherwise walks free HTML
+  backends — Chinese queries: Baidu → Bing CN → Bing → Bing RSS → DuckDuckGo; English:
+  Bing → Bing CN → Baidu → RSS → DDG — and reports diagnostics (status, page size,
+  whether `b_algo` was present) instead of a bare “search failed”.
+- **Web pages default to something that opens.** The guide asks for a single
+  self-contained HTML file (CSS/JS inline, no CDN, no exotic features) and for opening
+  instructions beyond a bare `file://` link, because desktop browsers cannot see phone
+  paths and mobile browsers often block the scheme.
+- **Every tool result says who ran it.** Results are prefixed with their source —
+  `[phone_sh · 应用身份]` (app identity), `[phone_shell · Shizuku uid 2000]`,
+  `[phone_screen · 无障碍]` (accessibility) — and the guide forbids attributing one
+  identity's success to another. `phone_shell` is injected into the core list as soon as
+  Shizuku is ready, so a capability the runtime block lists as available is visible
+  without a `tool_search` round.
+- **Feedback you can see and hear.** A tap throws seven small blocks (2.5–7 dp, 430 ms,
+  at most 3 bursts at once) from the touch point without consuming the gesture. Sounds
+  moved to their own `HandlerThread` (the first `ToneGenerator` construction used to
+  hitch the main thread) and are warmed up at startup. Task completion plays a synthetic
+  880 → 1318 Hz WAV (~0.35 s) through `MediaPlayer` on the media stream, audible while
+  the app is in the foreground; failures play a falling 523 → 330 Hz pair.
+- **Task notifications with a way back.** Finishing, failing or stopping a run posts on
+  the `agent-result-v2` channel (high importance, default notification sound, vibration):
+  the title follows the outcome, the body carries the conclusion preview plus
+  rounds / steps / elapsed / last tool, and tapping opens that conversation. The ongoing
+  foreground-service notification now exists only while there is work and is removed with
+  `stopForeground` when the run ends.
+- **Navigation is a real page stack.** The current screen is a `List<Screen>` saved with
+  `listSaver`, so back pops one level: conversation → Settings → back returns to the
+  conversation, and opening Settings no longer closes it. Relaunching the app returns to
+  the last base screen.
+
+## 3.1.6
+
+- Added the Anthropic / OpenAI protocol split, `OpenAiWire`, the `ProviderCompat` adapter
+  with its presets and detection, the cached model list and picker, and the run journal
+  that lets a killed UI recover a finished answer. See 3.5.0 for the shipped behaviour.
+
+## 3.1.4
+
+- Thinking cards stop collapsing while the answer streams — the expand state no longer
+  uses the streaming text as its `remember` key.
+- Tool results gained the `[tool · identity]` prefix and `phone_shell` became a core tool
+  whenever Shizuku is ready.
+- Corrected the network guidance to match the device: no `curl` / `wget`, Python has
+  only the standard library (no `pip` / `PIL` / `requests`), and `python3` is not a
+  shell command.
+
+## 3.1.3
+
+- Single self-contained HTML became the default web deliverable, with instructions for
+  opening it instead of a bare `file://` link.
+- Relaunching the app returns to the last conversation instead of the home screen.
+- An answer that hits the output budget continues automatically instead of ending the
+  task.
+
 ## 3.1.2
 
 - **The agent's tool guide is now organised around execution identity.** Three

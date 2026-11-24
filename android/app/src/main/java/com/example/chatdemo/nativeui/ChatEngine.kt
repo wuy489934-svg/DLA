@@ -58,6 +58,9 @@ object ChatEngine {
 
     private const val PREFS = "dla-native"
     private const val KEY_API = "apiKey"
+    private const val KEY_PROTOCOL = "protocol"
+    private const val KEY_PROVIDER = "provider"
+    private const val KEY_MODELS = "modelList"
     private const val KEY_BASE = "baseUrl"
     private const val KEY_MODEL = "model"
     private const val KEY_MODE = "uiMode"
@@ -69,11 +72,13 @@ object ChatEngine {
     private const val KEY_MIRROR = "mirrorMode"
     private const val KEY_AUTO_APPROVE = "autoApprove"
     private const val KEY_SOUND = "sound"
+    private const val KEY_NOTIFY = "notifyResult"
     private const val KEY_THEME = "themeMode"
     private const val KEY_FOLDER = "folderUri"
     private const val KEY_TTS = "tts"
     private const val KEY_LOCATION = "location"
     private const val KEY_CONTEXT_WINDOW = "contextWindow"
+    private const val KEY_LAST_SCREEN = "lastScreen"
 
     private lateinit var app: Context
     private lateinit var prefs: SharedPreferences
@@ -97,9 +102,35 @@ object ChatEngine {
     private var agentRequestId: String? = null
     private var startedAt = 0L
 
+    /**
+     * 正在跑的 Agent 轮次。
+     *
+     * 以前正文/工具卡只存在 `_open`（当前可见的会话）里，于是：
+     * - 界面一重启（Activity 重建 / 进程被杀重开），草稿被磁盘快照覆盖，任务跑完就没内容可存；
+     * - 用户在运行中切到别的会话，这一轮的文字会被写进错的会话。
+     * 现在运行状态独立于「看得见的会话」，收尾时也只写它自己的会话。
+     */
+    private class LiveRun(
+        val requestId: String,
+        val sessionId: String,
+        val mode: String,
+        val startedAt: Long,
+    ) {
+        var text: String = ""
+        var thinking: String = ""
+        val tools: MutableList<Block.Tool> = ArrayList()
+        var approval: Approval? = null
+        var contextTokens: Int = 0
+        var taskState: TaskState? = null
+    }
+
+    private var liveRun: LiveRun? = null
+    private var runReceiver: android.content.BroadcastReceiver? = null
+
     fun attach(context: Context) {
         if (::app.isInitialized) {
             attachListener()
+            runCatching { recoverRuns() }
             return
         }
         app = context.applicationContext
@@ -109,6 +140,11 @@ object ChatEngine {
         // 历史遗留的空会话（有壳没内容）统一清掉；有草稿的会留下
         runCatching { store.pruneEmpty() }
         attachListener()
+        registerRunReceiver()
+        // 预热点击音与提示音：AudioTrack / WAV 都在后台线程建好，主线程不卡
+        runCatching { SoundFeedback.attach(app) }
+        // 上次界面进程被杀时可能留下「跑到一半/刚跑完但没写回会话」的轮次
+        runCatching { recoverRuns() }
         refresh()
     }
 
@@ -120,6 +156,30 @@ object ChatEngine {
         }
     }
 
+    /**
+     * 监听 :agent 写回的运行日志。
+     *
+     * 任务在 :agent 里跑，界面进程被杀掉也不影响它继续；跑完会发一条本地广播，
+     * 界面收到就把这条回答补进会话（见 recoverRuns）。
+     */
+    private fun registerRunReceiver() {
+        if (runReceiver != null || !::app.isInitialized) return
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: android.content.Intent?) {
+                runCatching { recoverRuns() }
+            }
+        }
+        runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(
+                app,
+                receiver,
+                android.content.IntentFilter(com.example.chatdemo.agent.AgentRunJournal.ACTION),
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            runReceiver = receiver
+        }.onFailure { Log.w("DlaAgent", "register run receiver failed: ${it.message}") }
+    }
+
     // ---- 设置 ----
 
     var apiKey: String
@@ -128,11 +188,63 @@ object ChatEngine {
 
     var baseUrl: String
         get() = prefs.getString(KEY_BASE, "").orEmpty().ifBlank { "https://api.deepseek.com/anthropic/v1" }
-        set(value) = prefs.edit().putString(KEY_BASE, value.trim()).apply()
+        set(value) {
+            val trimmed = value.trim()
+            // 手滑粘成半截（如 "tps://…"）时回到默认，避免请求打到 "1/v1/messages"
+            val normalized = if (trimmed.isEmpty() || trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else ""
+            prefs.edit().putString(KEY_BASE, normalized).apply()
+        }
 
+
+    /** 请求方言：anthropic（DeepSeek / Claude）或 openai（GPT / Qwen / GLM / Kimi…） */
+    var protocol: String
+        get() = prefs.getString(KEY_PROTOCOL, "anthropic").orEmpty().ifBlank { "anthropic" }
+        set(value) = prefs.edit().putString(KEY_PROTOCOL, value.trim().lowercase()).apply()
     var model: String
         get() = prefs.getString(KEY_MODEL, "").orEmpty().ifBlank { "deepseek-flash" }
         set(value) = prefs.edit().putString(KEY_MODEL, value.trim()).apply()
+
+    /** 实际请求用的 Base URL：切协议时自动换掉另一套默认路径，避免打错端点 */
+    fun effectiveBaseUrl(): String {
+        val raw = baseUrl
+        return when {
+            protocol == "openai" && raw.contains("/anthropic/v1") ->
+                raw.replace("/anthropic/v1", "/v1")
+            protocol == "anthropic" && raw.endsWith("/v1") && !raw.contains("/anthropic/") ->
+                raw.removeSuffix("/v1") + "/anthropic/v1"
+            else -> raw
+        }
+    }
+
+    /**
+     * 供应商 id（deepseek / qwen / openai / anthropic …）。
+     *
+     * 空串表示没指定：请求层会按 Base URL + 模型名自动识别（ProviderCompat.detect），
+     * 所以老用户升级上来不需要重新配置。
+     */
+    var provider: String
+        get() = prefs.getString(KEY_PROVIDER, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_PROVIDER, value.trim().lowercase()).apply()
+
+    /** 实际生效的供应商：界面没指定就自动识别 */
+    fun resolvedProvider(): String =
+        provider.ifBlank { com.example.chatdemo.agent.ProviderCompat.detect(baseUrl, model, protocol) }
+
+    /**
+     * 上次「拉取并测试连接」拿到的模型列表。
+     *
+     * 存下来是为了「设置页重新进来还能挑」——不然每次都要再拉一遍才出现下拉。
+     */
+    var cachedModels: List<String>
+        get() {
+            val raw = prefs.getString(KEY_MODELS, "").orEmpty()
+            if (raw.isBlank()) return emptyList()
+            return runCatching {
+                val array = JSONArray(raw)
+                (0 until array.length()).mapNotNull { array.optString(it).ifBlank { null } }
+            }.getOrDefault(emptyList())
+        }
+        set(value) = prefs.edit().putString(KEY_MODELS, JSONArray(value).toString()).apply()
 
     var uiMode: String
         get() = prefs.getString(KEY_MODE, "native").orEmpty()
@@ -154,6 +266,22 @@ object ChatEngine {
     var soundEnabled: Boolean
         get() = prefs.getBoolean(KEY_SOUND, true)
         set(value) = prefs.edit().putBoolean(KEY_SOUND, value).apply()
+
+    /**
+     * 任务通知：Agent 完成 / 失败 / 停止时发系统通知（`:agent` 进程直接读同一个偏好键）。
+     */
+    var notifyResult: Boolean
+        get() = prefs.getBoolean(KEY_NOTIFY, true)
+        set(value) = prefs.edit().putBoolean(KEY_NOTIFY, value).apply()
+
+    /** 通知权限是否已授予（Android 13+ 需要运行时授权） */
+    fun canPostNotifications(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 33) return true
+        return androidx.core.content.ContextCompat.checkSelfPermission(
+            app,
+            android.Manifest.permission.POST_NOTIFICATIONS,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
 
     /** 用户授权的系统文件夹（SAF tree URI），用于 Agent 批量导入 */
     var folderUri: String?
@@ -236,6 +364,19 @@ object ChatEngine {
         _sessions.value = store.cards()
     }
 
+    /**
+     * 上次停留的页面。
+     *
+     * 以前退出应用再进来永远回首页，用户要重新点分区、再找会话；
+     * 这里把「聊天:会话 id / 分区:模式」记在偏好里，启动时据此恢复。
+     */
+    var lastScreen: String
+        get() = prefs.getString(KEY_LAST_SCREEN, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_LAST_SCREEN, value).apply()
+
+    /** 会话是否存在（恢复上次页面时用，不打开、不改状态） */
+    fun sessionExists(id: String): Boolean = runCatching { store.detail(id) != null }.getOrDefault(false)
+
     fun delete(id: String) {
         store.delete(id)
         if (_open.value?.id == id) _open.value = null
@@ -258,6 +399,43 @@ object ChatEngine {
 
     fun open(id: String) {
         val detail = store.detail(id) ?: return
+        val previous = _open.value
+        val run = synchronized(lock) { liveRun }
+        // 情况一：这个会话正在流式（Agent 轮次或 LLM 回复）。磁盘快照里没有正在生长的
+        // 正文和工具卡，直接覆盖会让用户眼看着内容消失——所以保留草稿，只刷新已落盘的消息。
+        if (previous != null && previous.id == id && previous.streaming) {
+            _open.value = previous.copy(
+                messages = detail.messages,
+                title = detail.title,
+                draftInput = detail.draft,
+                contextWindow = contextWindow,
+            )
+            return
+        }
+        // 情况二：界面进程刚重启，但 :agent 里这一轮还在跑（或有日志待认领）。
+        // 把运行状态重新挂到界面上，继续显示并继续接收事件。
+        if (run != null && run.sessionId == id) {
+            _open.value = Open(
+                id = detail.id,
+                title = detail.title,
+                mode = detail.mode,
+                messages = detail.messages,
+                streaming = true,
+                draftText = run.text,
+                draftThinking = run.thinking,
+                draftTools = run.tools.toList(),
+                approval = run.approval,
+                startedAt = run.startedAt,
+                draftInput = detail.draft,
+                taskState = detail.taskState ?: run.taskState,
+                contextTokens = run.contextTokens,
+                contextWindow = contextWindow,
+                lastTurnMs = detail.usageStats?.turnMs ?: 0L,
+            )
+            agentRequestId = run.requestId
+            _busy.value = true
+            return
+        }
         val usage = detail.usageStats
         _open.value = Open(
             id = detail.id,
@@ -366,11 +544,13 @@ object ChatEngine {
         val messages = LlmClient.buildMessages(history, image, imageNote)
         val config = LlmClient.Config(
             apiKey = apiKey,
-            baseUrl = baseUrl,
+            baseUrl = effectiveBaseUrl(),
             model = model,
             system = systemPrompt(),
             thinking = thinking,
             search = search,
+            protocol = protocol,
+            provider = resolvedProvider(),
         )
         llmHandle = LlmClient.stream(config, messages, object : LlmClient.Sink {
             override fun onText(delta: String) = update { it.copy(draftText = it.draftText + delta) }
@@ -462,11 +642,13 @@ object ChatEngine {
         }
         val config = LlmClient.Config(
             apiKey = key,
-            baseUrl = baseUrl,
+            baseUrl = effectiveBaseUrl(),
             model = model,
             system = PERSONA_FILL_SYSTEM,
             thinking = false,
             search = false,
+            protocol = protocol,
+            provider = resolvedProvider(),
         )
         val collected = StringBuilder()
         val done = CompletableDeferred<String>()
@@ -574,6 +756,13 @@ object ChatEngine {
     fun stop() {
         llmHandle?.cancel()
         llmHandle = null
+        val run = synchronized(lock) { liveRun }
+        if (run != null) {
+            // 先把已经生成的部分落盘，再通知 :agent 停；晚到的 stopped 事件会被忽略
+            runCatching { AgentClient.get().stop(run.requestId) }
+            finishAgent(run.sessionId, "stopped")
+            return
+        }
         agentRequestId?.let { runCatching { AgentClient.get().stop(it) } }
         agentRequestId = null
         val current = _open.value ?: return
@@ -604,11 +793,16 @@ object ChatEngine {
 
     /** 兜底：运行状态和界面不一致时收敛，避免永远「生成中」 */
     fun reconcileIfStuck() {
-        val current = _open.value ?: return
-        if (!current.streaming) return
+        val run = synchronized(lock) { liveRun }
+        val current = _open.value
+        if (run == null && current?.streaming != true) return
         val running = runCatching { AgentClient.get().isRunning() }.getOrDefault(false)
+        if (run != null) {
+            if (!running) finishAgent(run.sessionId, "stopped")
+            return
+        }
         val requestId = agentRequestId
-        if (current.mode == "agent" && (requestId == null || !running)) {
+        if (current != null && current.mode == "agent" && (requestId == null || !running)) {
             finishAgent(current.id, "done")
         }
     }
@@ -626,11 +820,20 @@ object ChatEngine {
         }
         val requestId = UUID.randomUUID().toString()
         agentRequestId = requestId
+        val mode = _open.value?.mode ?: "agent"
+        synchronized(lock) {
+            liveRun = LiveRun(requestId, sessionId, mode, startedAt)
+        }
         val payload = JSONObject().apply {
             put("apiKey", apiKey)
-            put("apiOrigin", originOf(baseUrl))
-            put("apiBaseUrl", baseUrl)
+            put("apiOrigin", originOf(effectiveBaseUrl()))
+            put("apiBaseUrl", effectiveBaseUrl())
             put("model", model)
+            put("protocol", protocol)
+            // 供应商 + 会话 id：前者决定兼容开关，后者让 :agent 的日志知道把回答补到哪个会话
+            put("provider", resolvedProvider())
+            put("sessionId", sessionId)
+            put("mode", mode)
             put("system", AGENT_SYSTEM)
             put("messages", JSONArray().apply {
                 // 先放历史（最近若干轮），再放这一轮的输入：
@@ -711,24 +914,32 @@ object ChatEngine {
     }
 
     private fun onAgentEvent(requestId: String, event: JSONObject) {
+        val type = event.optString("type")
+        val run = synchronized(lock) { liveRun }
         // 只接受当前这次运行的��件，避免被恢复的旧运行串台
-        val expected = agentRequestId
-        if (expected != null && requestId != expected) {
-            Log.d("DlaAgent", "drop event ${event.optString("type")} from $requestId")
+        if (run == null || run.requestId != requestId) {
+            val expected = agentRequestId
+            if (expected != null && requestId != expected) {
+                Log.d("DlaAgent", "drop event $type from $requestId")
+            } else {
+                // 界面刚重启、还没挂上这轮运行：让日志认领把已跑完的内容补回来
+                if (type == "done" || type == "stopped" || type == "error") {
+                    runCatching { recoverRuns() }
+                }
+            }
             return
         }
-        val type = event.optString("type")
-        val current = _open.value ?: return
-        if (!current.streaming) return
         when (type) {
             // 正文/思考的增量字段是 delta；兼容旧字段 text
             "text" -> {
                 val delta = event.optString("delta").ifEmpty { event.optString("text") }
-                update { it.copy(draftText = it.draftText + delta) }
+                synchronized(lock) { run.text += delta }
+                mirrorRun(run)
             }
             "thinking" -> {
                 val delta = event.optString("delta").ifEmpty { event.optString("text") }
-                update { it.copy(draftThinking = it.draftThinking + delta) }
+                synchronized(lock) { run.thinking += delta }
+                mirrorRun(run)
             }
             "tool_start" -> {
                 Log.d("DlaAgent", "tool_start name=${event.optString("name")} approval=${event.optBoolean("approval")} input=${event.optString("input").take(80)}")
@@ -742,16 +953,13 @@ object ChatEngine {
                     elapsedMs = 0L,
                     round = event.optInt("round", 0),
                 )
-                update { open ->
-                    open.copy(
-                        draftTools = open.draftTools + tool,
-                        approval = if (event.optBoolean("approval")) {
-                            Approval(id, tool.name, tool.input)
-                        } else {
-                            open.approval
-                        },
-                    )
+                synchronized(lock) {
+                    run.tools += tool
+                    if (event.optBoolean("approval")) {
+                        run.approval = Approval(id, tool.name, tool.input)
+                    }
                 }
+                mirrorRun(run)
             }
             "tool_result" -> {
                 val id = event.optString("id")
@@ -765,22 +973,18 @@ object ChatEngine {
                 // AgentRunner 已经算好这条工具自己的耗时；以前用的是「运行开始到现在」，
                 // 长任务里会显示成 1484111ms 这种越滚越大的数字。
                 val elapsed = event.optLong("elapsedMs", 0L)
-                update { open ->
-                    open.copy(
-                        draftTools = open.draftTools.map { tool ->
-                            if (tool.id == id) {
-                                tool.copy(
-                                    status = if (isError) "error" else "done",
-                                    result = result,
-                                    elapsedMs = if (elapsed > 0) elapsed else tool.elapsedMs,
-                                )
-                            } else {
-                                tool
-                            }
-                        },
-                        approval = if (open.approval?.toolId == id) null else open.approval,
-                    )
+                synchronized(lock) {
+                    val index = run.tools.indexOfFirst { it.id == id }
+                    if (index >= 0) {
+                        run.tools[index] = run.tools[index].copy(
+                            status = if (isError) "error" else "done",
+                            result = result,
+                            elapsedMs = if (elapsed > 0) elapsed else run.tools[index].elapsedMs,
+                        )
+                    }
+                    if (run.approval?.toolId == id) run.approval = null
                 }
+                mirrorRun(run)
             }
             // 每轮请求结束时的 token 用量：Agent 区用量条只认最近这一轮（≈ 当前上下文占用）
             "usage" -> {
@@ -789,7 +993,8 @@ object ChatEngine {
                     event.optInt("cacheReadInputTokens") +
                     event.optInt("outputTokens")
                 if (used > 0) {
-                    update { it.copy(contextTokens = used, contextWindow = contextWindow) }
+                    synchronized(lock) { run.contextTokens = used }
+                    mirrorRun(run)
                 }
             }
             // 计划/笔记：存下来，点「继续」时回传给 AgentRunner
@@ -801,60 +1006,299 @@ object ChatEngine {
                     current = event.optInt("current", 1),
                     notes = (0 until (notes?.length() ?: 0)).mapNotNull { notes?.optString(it)?.ifBlank { null } },
                 )
-                update { it.copy(taskState = if (state.isEmpty) it.taskState else state) }
+                if (!state.isEmpty) {
+                    synchronized(lock) { run.taskState = state }
+                    mirrorRun(run)
+                }
             }
-            "done" -> finishAgent(current.id, "done")
-            "stopped" -> finishAgent(current.id, "stopped")
-            "error" -> finishAgent(current.id, "error", event.optString("message").ifBlank { Lang.t("Agent 运行失败") })
+            "done" -> finishAgent(run.sessionId, "done")
+            "stopped" -> finishAgent(run.sessionId, "stopped")
+            "error" -> finishAgent(
+                run.sessionId,
+                "error",
+                event.optString("message").ifBlank { Lang.t("Agent 运行失败") },
+            )
             "status" -> Unit
         }
     }
 
-    private fun finishAgent(sessionId: String, status: String, error: String? = null) {
-        val current = synchronized(lock) { _open.value } ?: return
-        // 单轮总耗时：用户发出这条消息 → 这一轮结束。只记这一轮，不跨轮累计。
-        val turnMs = if (current.startedAt > 0) {
-            (System.currentTimeMillis() - current.startedAt).coerceAtLeast(0L)
-        } else {
-            current.lastTurnMs
+    /**
+     * 把运行状态同步到界面，**只在用户正看着这个会话时**。
+     *
+     * 这样即使用户中途切到别的会话，这一轮也不会把文字写进别人家；回头再打开，
+     * open() 会把运行中的草稿重新铺上去。
+     */
+    private fun mirrorRun(run: LiveRun) {
+        synchronized(lock) {
+            val current = _open.value ?: return
+            if (current.id != run.sessionId) return
+            val ownerBusy = run.sessionId == current.id
+            _open.value = current.copy(
+                streaming = true,
+                draftText = run.text,
+                draftThinking = run.thinking,
+                draftTools = run.tools.toList(),
+                approval = run.approval,
+                startedAt = if (current.startedAt > 0) current.startedAt else run.startedAt,
+                contextTokens = if (run.contextTokens > 0) run.contextTokens else current.contextTokens,
+                contextWindow = contextWindow,
+                taskState = run.taskState ?: current.taskState,
+            )
+            if (ownerBusy) _busy.value = true
         }
-        val rounds = current.draftTools.map { it.round }.filter { it > 0 }.maxOrNull() ?: 0
+    }
+
+    private fun finishAgent(sessionId: String, status: String, error: String? = null) {
+        val run = synchronized(lock) { liveRun?.takeIf { it.sessionId == sessionId } }
+        val current = _open.value
+        val open = current?.takeIf { it.id == sessionId }
+        val streamingOpen = open?.takeIf { it.streaming }
+        // 数据源优先运行本身（与界面是否重建、用户在看哪个会话无关）
+        val text = run?.text ?: streamingOpen?.draftText.orEmpty()
+        val thinking = run?.thinking ?: streamingOpen?.draftThinking.orEmpty()
+        val tools = run?.tools?.toList() ?: streamingOpen?.draftTools ?: emptyList()
+        val mode = run?.mode ?: open?.mode ?: "agent"
+        val startedStamp = run?.startedAt ?: open?.startedAt ?: 0L
+        val taskState = run?.taskState ?: open?.taskState
+        val contextTokens = run?.contextTokens ?: open?.contextTokens ?: 0
+        // 单轮总耗时：用户发出这条消息 → 这一轮结束。只记这一轮，不跨轮累计。
+        val turnMs = if (startedStamp > 0) {
+            (System.currentTimeMillis() - startedStamp).coerceAtLeast(0L)
+        } else {
+            open?.lastTurnMs ?: 0L
+        }
+        val rounds = tools.map { it.round }.filter { it > 0 }.maxOrNull() ?: 0
         val usage = UsageStats(
             rounds = rounds,
-            steps = current.draftTools.size,
-            contextTokens = current.contextTokens,
+            steps = tools.size,
+            contextTokens = contextTokens,
             turnMs = turnMs,
         )
-        if (current.draftText.isNotBlank() || current.draftTools.isNotEmpty()) {
+        val runId = run?.requestId
+        val alreadySaved = runId != null && store.hasRun(sessionId, runId)
+        if (!alreadySaved && (text.isNotBlank() || tools.isNotEmpty() || thinking.isNotBlank())) {
             store.appendAssistant(
                 sessionId,
-                current.draftText,
-                current.draftThinking,
-                current.draftTools,
+                text,
+                thinking,
+                tools,
                 status,
-                current.mode,
+                mode,
                 usage,
+                runId,
             )
-            runCatching { store.saveTaskState(sessionId, current.mode, current.taskState) }
         }
-        val detail = store.detail(sessionId)
-        _open.value = current.copy(
-            messages = detail?.messages ?: current.messages,
-            streaming = false,
-            draftText = "",
-            draftThinking = "",
-            draftTools = emptyList(),
-            error = error,
-            approval = null,
-            startedAt = 0L,
-            lastTurnMs = turnMs,
-            contextWindow = contextWindow,
-        )
-        _busy.value = false
+        if (taskState != null && !taskState.isEmpty) {
+            runCatching { store.saveTaskState(sessionId, mode, taskState) }
+        }
+        // 回答已经落进会话，:agent 那边的日志可以删掉了
+        if (runId != null) {
+            runCatching {
+                com.example.chatdemo.agent.AgentRunJournal.consume(java.io.File(journalDir(), "$runId.json"))
+            }
+        }
+        synchronized(lock) {
+            if (liveRun?.sessionId == sessionId) liveRun = null
+        }
         agentRequestId = null
+        if (open != null) {
+            val detail = store.detail(sessionId)
+            _open.value = open.copy(
+                messages = detail?.messages ?: open.messages,
+                streaming = false,
+                draftText = "",
+                draftThinking = "",
+                draftTools = emptyList(),
+                error = error,
+                approval = null,
+                startedAt = 0L,
+                lastTurnMs = turnMs,
+                contextTokens = contextTokens,
+                contextWindow = contextWindow,
+                taskState = detail?.taskState ?: open.taskState,
+            )
+        }
+        _busy.value = false
         if (error != null) SoundFeedback.error() else SoundFeedback.done()
-
         refresh()
+    }
+
+    private fun journalDir(): java.io.File =
+        java.io.File(app.filesDir, com.example.chatdemo.agent.AgentRunJournal.DIR)
+
+    /**
+     * 认领 :agent 留下的运行日志。
+     *
+     * 两种情况都要处理：
+     * - status=running：任务还在跑（界面前一秒被杀过），把草稿铺回界面继续收事件；
+     * - status=done/error/stopped：任务早就结束了但界面没接住，把这条回答补进会话。
+     *
+     * 用 runId 去重，所以重复认领、实时事件与日志同时到达都不会写出两条。
+     */
+    fun recoverRuns() {
+        if (!::app.isInitialized) return
+        val files = runCatching {
+            com.example.chatdemo.agent.AgentRunJournal.pending(app)
+        }.getOrDefault(emptyList())
+        if (files.isEmpty()) return
+        var changed = false
+        for (file in files) {
+            val json = runCatching { JSONObject(file.readText()) }.getOrNull()
+            if (json == null) {
+                com.example.chatdemo.agent.AgentRunJournal.consume(file)
+                continue
+            }
+            val runId = json.optString("requestId")
+            val sessionId = json.optString("sessionId")
+            if (runId.isBlank() || sessionId.isBlank() || store.detail(sessionId) == null) {
+                com.example.chatdemo.agent.AgentRunJournal.consume(file)
+                continue
+            }
+            var status = json.optString("status", "running")
+            val running = runCatching { AgentClient.get().isRunning() }.getOrDefault(false)
+            // 刚写过的日志基本可以断定还在跑（界面刚起来时 IPC 状态还没回来，
+            // 别急着把它当「已停止」补一条假消息）
+            val fresh = System.currentTimeMillis() - file.lastModified() < 15_000L
+            if (status == "running") {
+                if (running || fresh) {
+                    attachLiveRun(json, runId, sessionId)
+                    continue
+                }
+                // 进程死了、任务其实已经不在跑：当作被中断，能补多少补多少
+                status = "stopped"
+            }
+            val runIdKey = runId
+            if (!store.hasRun(sessionId, runIdKey)) {
+                val text = json.optString("text")
+                val thinking = json.optString("thinking")
+                val tools = parseJournalTools(json.optJSONArray("tools"))
+                val mode = json.optString("mode", "agent")
+                val startedStamp = json.optLong("startedAt", 0L)
+                val usageJson = json.optJSONObject("usage")
+                val contextTokens = usageJson?.let {
+                    it.optInt("inputTokens") + it.optInt("outputTokens") +
+                        it.optInt("cacheCreationInputTokens") + it.optInt("cacheReadInputTokens")
+                } ?: 0
+                val turnMs = if (startedStamp > 0) {
+                    (json.optLong("updatedAt", System.currentTimeMillis()) - startedStamp)
+                        .coerceAtLeast(0L)
+                } else 0L
+                val usage = UsageStats(
+                    rounds = tools.map { it.round }.filter { it > 0 }.maxOrNull() ?: 0,
+                    steps = tools.size,
+                    contextTokens = contextTokens,
+                    turnMs = turnMs,
+                )
+                val error = json.optString("error").ifBlank { null }
+                // 只有报错、没有正文的轮次也要留痕，否则用户只看到「任务结束」却什么都没有
+                val fallback = if (text.isBlank() && tools.isEmpty() && thinking.isBlank() && error != null) {
+                    Lang.t("运行失败：%s", error)
+                } else {
+                    ""
+                }
+                if (text.isNotBlank() || tools.isNotEmpty() || thinking.isNotBlank() || fallback.isNotBlank()) {
+                    store.appendAssistant(
+                        sessionId,
+                        if (text.isBlank()) fallback else text,
+                        thinking,
+                        tools,
+                        if (status == "error") "error" else status,
+                        mode,
+                        usage,
+                        runIdKey,
+                    )
+                    Log.d("DlaAgent", "recovered run $runIdKey into $sessionId (${tools.size} tools)")
+                    changed = true
+                }
+                json.optJSONObject("taskState")?.let { state ->
+                    val plan = state.optJSONArray("plan")
+                    val notes = state.optJSONArray("notes")
+                    runCatching {
+                        store.saveTaskState(
+                            sessionId,
+                            mode,
+                            TaskState(
+                                plan = (0 until (plan?.length() ?: 0)).mapNotNull { plan?.optString(it)?.ifBlank { null } },
+                                current = state.optInt("current", 1),
+                                notes = (0 until (notes?.length() ?: 0)).mapNotNull { notes?.optString(it)?.ifBlank { null } },
+                            ),
+                        )
+                    }
+                }
+                if (error != null) Log.w("DlaAgent", "recovered errored run $runIdKey: $error")
+            }
+            com.example.chatdemo.agent.AgentRunJournal.consume(file)
+        }
+        if (changed) {
+            refresh()
+            val current = _open.value
+            if (current != null && !current.streaming) {
+                store.detail(current.id)?.let { detail ->
+                    _open.value = current.copy(
+                        messages = detail.messages,
+                        contextTokens = detail.usageStats?.contextTokens ?: current.contextTokens,
+                        lastTurnMs = detail.usageStats?.turnMs ?: current.lastTurnMs,
+                    )
+                }
+            }
+        }
+    }
+
+    /** 任务还在跑：把日志里已有的内容挂回界面，并继续接收后续事件 */
+    private fun attachLiveRun(json: JSONObject, runId: String, sessionId: String) {
+        val already = synchronized(lock) { liveRun?.requestId == runId }
+        if (already) return
+        val run = LiveRun(
+            requestId = runId,
+            sessionId = sessionId,
+            mode = json.optString("mode", "agent"),
+            startedAt = json.optLong("startedAt", System.currentTimeMillis()),
+        )
+        run.text = json.optString("text")
+        run.thinking = json.optString("thinking")
+        run.tools += parseJournalTools(json.optJSONArray("tools"))
+        json.optJSONObject("usage")?.let {
+            run.contextTokens = it.optInt("inputTokens") + it.optInt("outputTokens") +
+                it.optInt("cacheCreationInputTokens") + it.optInt("cacheReadInputTokens")
+        }
+        json.optJSONObject("taskState")?.let { state ->
+            val plan = state.optJSONArray("plan")
+            val notes = state.optJSONArray("notes")
+            run.taskState = TaskState(
+                plan = (0 until (plan?.length() ?: 0)).mapNotNull { plan?.optString(it)?.ifBlank { null } },
+                current = state.optInt("current", 1),
+                notes = (0 until (notes?.length() ?: 0)).mapNotNull { notes?.optString(it)?.ifBlank { null } },
+            )
+        }
+        synchronized(lock) { liveRun = run }
+        agentRequestId = runId
+        attachListener()
+        val current = _open.value
+        if (current != null && current.id == sessionId) {
+            mirrorRun(run)
+        } else {
+            Log.d("DlaAgent", "live run $runId restored (session $sessionId not open)")
+        }
+    }
+
+    private fun parseJournalTools(array: JSONArray?): List<Block.Tool> {
+        if (array == null) return emptyList()
+        val out = ArrayList<Block.Tool>(array.length())
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            val name = item.optString("name")
+            if (name.isBlank()) continue
+            out += Block.Tool(
+                id = item.optString("id"),
+                name = name,
+                status = item.optString("status").ifEmpty { "done" },
+                input = item.optString("input"),
+                result = item.optString("result").ifBlank { null },
+                elapsedMs = item.optLong("elapsedMs", 0L),
+                round = item.optInt("round", 0),
+            )
+        }
+        return out
     }
 
     fun approve(toolId: String, allowed: Boolean) {
@@ -909,7 +1353,8 @@ object ChatEngine {
     /** 原生 Agent 的系统提示：与网页版保持同一套身份与工具规则 */
     private val AGENT_SYSTEM = listOf(
         "你是 DLA（DeepSeek LLM Agent），运行在用户 Android 手机上的本地智能体。",
-        "你的语言与推理能力来自 DeepSeek 模型，但你不是 DeepSeek 官方产品，也不代表深度求索公司；不要声称自己是官方客户端或官方客服。",
+        "你的语言与推理能力来自用户在设置里接入的大模型（可能是 DeepSeek、通义千问、GPT、Claude 等任意一家），你不是任何模型厂商的官方产品，也不代表它们；不要声称自己是官方客户端或官方客服。",
+        "不要猜测自己跑在哪个模型上，也不要主动报模型名；用户问起时，只说明「可以在设置 → 模型接口 里查看当前接入的模型」。",
         "你是 AI，不是人类，没有身体、感官、情绪或脱离工具的现实感知；设备、屏幕、文件和网络的情况只能来自工具结果、用户输入和当前上下文，工具没有返回的事不能编造。",
         "工作方式：先理解目标，再选最少、最合适的工具，执行后核对结果；高风险或不可逆操作先说明并等待确认；遇到权限、审批或能力边界要明确说明，不确定就说不确定。",
         "工具选择：phone_sh 是默认执行入口（应用身份）；phone_py / phone_js、文件、设置、剪贴板、通知、zip、docx 要先 tool_search；屏幕与点按走无障碍工具。",

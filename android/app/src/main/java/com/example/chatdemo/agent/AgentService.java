@@ -45,11 +45,39 @@ public class AgentService extends Service {
 
     private static final String TAG = "AgentService";
     private static final String CHANNEL = "agent-run";
+    /** 结果通知走另一个渠道：任务完成 / 失败要能弹出来，不能被「低优先级」静音 */
+    private static final String CHANNEL_RESULT = "agent-result-v2";
     private static final int NOTIFICATION_ID = 1001;
+    private static final int NOTIFICATION_RESULT_ID = 1002;
+    public static final String EXTRA_SESSION = "openSession";
     private static final String ACTION_STOP = "com.example.chatdemo.agent.STOP";
     private static final String ACTION_RESUME = "com.example.chatdemo.agent.RESUME";
 
     private final Set<Messenger> clients = new CopyOnWriteArraySet<>();
+
+    /** 当前实例：任务结束时要用它把常驻通知撤掉（stopForeground 只能实例调用） */
+    private static volatile AgentService current;
+
+    /**
+     * 一轮任务结束：撤掉「正在执行任务」的常驻通知。
+     *
+     * 为什么不能只 cancel：前台服务通知必须用 stopForeground(STOP_FOREGROUND_REMOVE) 才会真的消失，
+     * 而服务因为客户端还 bind 着不会销毁，通知就会一直挂在通知栏上（曾经一直显示「Agent 正在执行任务」）。
+     */
+    public static void clearProgress(Context context) {
+        AgentService service = current;
+        try {
+            if (service != null) {
+                ServiceCompat.stopForeground(service, ServiceCompat.STOP_FOREGROUND_REMOVE);
+            }
+            NotificationManager manager = context.getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.cancel(NOTIFICATION_ID);
+            }
+        } catch (Throwable ignored) {
+            // 撤通知失败不影响任务结果
+        }
+    }
 
     private final Messenger messenger = new Messenger(new Handler(Looper.getMainLooper()) {
         @Override
@@ -121,9 +149,90 @@ public class AgentService extends Service {
                 .build();
     }
 
+    /**
+     * 任务结束的「结果通知」：完成 / 失败 / 已停止。
+     *
+     * 和前台服务那条常驻通知分开：这条会响、会弹，点一下直接回到那个会话；
+     * 正文放大（BigText），这样通知栏里就能看到「结论 + 轮/步/耗时 + 最后工具」，
+     * 不必先点开应用。
+     */
+    public static void notifyResult(Context context, String sessionId, String status,
+                                    String title, String body, String bigText) {
+        try {
+            if (context == null) return;
+            android.content.SharedPreferences prefs =
+                    context.getSharedPreferences("dla-native", Context.MODE_PRIVATE);
+            if (!prefs.getBoolean("notifyResult", true)) {
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Log.i(TAG, "result notification skipped: no POST_NOTIFICATIONS");
+                return;
+            }
+            NotificationManager manager = context.getSystemService(NotificationManager.class);
+            if (manager == null) return;
+            android.net.Uri sound = android.media.RingtoneManager.getDefaultUri(
+                    android.media.RingtoneManager.TYPE_NOTIFICATION);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel channel = new NotificationChannel(
+                        CHANNEL_RESULT,
+                        context.getString(R.string.agent_result_channel_name),
+                        NotificationManager.IMPORTANCE_HIGH
+                );
+                channel.setDescription(context.getString(R.string.agent_result_channel_description));
+                channel.enableVibration(true);
+                channel.setVibrationPattern(new long[]{0, 80, 60, 120});
+                if (sound != null) {
+                    android.media.AudioAttributes attributes =
+                            new android.media.AudioAttributes.Builder()
+                                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                    .build();
+                    channel.setSound(sound, attributes);
+                }
+                manager.createNotificationChannel(channel);
+            }
+            Intent open = new Intent(context, com.example.chatdemo.nativeui.NativeShellActivity.class);
+            open.putExtra(EXTRA_SESSION, sessionId == null ? "" : sessionId);
+            open.putExtra("resultStatus", status == null ? "" : status);
+            // SINGLE_TOP + CLEAR_TOP：界面已经在前台时走 onNewIntent，不会叠出第二个界面实例
+            open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent contentIntent = PendingIntent.getActivity(
+                    context,
+                    10,
+                    open,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+            );
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_RESULT)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setSmallIcon(R.drawable.ic_stat_agent)
+                    .setContentIntent(contentIntent)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(false)
+                    .setCategory(NotificationCompat.CATEGORY_STATUS)
+                    // 渠道决定 O+ 的铃声；这两行兜住低版本和渠道被用户改静音的情况
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setSound(sound)
+                    .setVibrate(new long[]{0, 80, 60, 120})
+                    .setDefaults(NotificationCompat.DEFAULT_ALL);
+            if (bigText != null && !bigText.isEmpty()) {
+                builder.setStyle(new NotificationCompat.BigTextStyle().bigText(bigText));
+            }
+            manager.notify(NOTIFICATION_RESULT_ID, builder.build());
+        } catch (Throwable error) {
+            Log.w(TAG, "notifyResult failed: " + error);
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        current = this;
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager != null) {
             NotificationChannel channel = new NotificationChannel(
@@ -134,6 +243,24 @@ public class AgentService extends Service {
             channel.setDescription(getString(R.string.agent_channel_description));
             manager.createNotificationChannel(channel);
         }
+        // 只有「确实有活」的时候才挂前台通知。
+        // 之前无论怎么创建都 startForeground，于是界面一 bind，通知栏就常驻一条
+        // 「Agent 正在执行任务」——任务早就结束了，通知还在，很误导。
+        if (hasWork()) {
+            ensureForeground();
+        }
+
+        // 运行时事件 -> 广播给所有已连接的 UI
+        AgentRuntime.get().setListener((requestId, event) -> broadcast(requestId, event));
+    }
+
+    /** 有未完成任务 / 正在跑 / 还有客户端连着 */
+    private boolean hasWork() {
+        return AgentCheckpoint.hasPending(this) || AgentRuntime.get().isRunning() || !clients.isEmpty();
+    }
+
+    /** 挂前台通知（多次调用无副作用） */
+    private void ensureForeground() {
         Notification notification = build(this, getString(R.string.agent_notification_text));
         int type;
         if (Build.VERSION.SDK_INT >= 34) {
@@ -143,9 +270,6 @@ public class AgentService extends Service {
             type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type);
-
-        // 运行时事件 -> 广播给所有已连接的 UI
-        AgentRuntime.get().setListener((requestId, event) -> broadcast(requestId, event));
     }
 
     @Override
@@ -165,16 +289,22 @@ public class AgentService extends Service {
             boolean resumed = AgentRuntime.get().resumeIfNeeded(this);
             Log.i(TAG, "resume requested -> " + resumed);
             if (!resumed && !AgentRuntime.get().isRunning() && clients.isEmpty()) {
+                // 用 startForegroundService 拉起来的服务必须在 5 秒内挂前台，
+                // 哪怕马上就停，也要先满足契约再 stopSelf，否则会抛 RemoteServiceException
+                ensureForeground();
                 stopSelf();
                 return START_NOT_STICKY;
             }
+            ensureForeground();
             return START_STICKY;
         }
         // 没有未完成任务就不要留下一个空的前台服务
         if (!AgentCheckpoint.hasPending(this) && !AgentRuntime.get().isRunning() && clients.isEmpty()) {
+            ensureForeground();
             stopSelf();
             return START_NOT_STICKY;
         }
+        ensureForeground();
         return START_STICKY;
     }
 
@@ -197,6 +327,16 @@ public class AgentService extends Service {
     @Override
     public void onDestroy() {
         clients.clear();
+        if (current == this) current = null;
+        // 服务没了，常驻通知也一起收掉，别让「Agent 正在执行任务」挂在通知栏里骗人
+        try {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.cancel(NOTIFICATION_ID);
+            }
+        } catch (Throwable ignored) {
+            // 取消失败不影响任何逻辑
+        }
         super.onDestroy();
     }
 
