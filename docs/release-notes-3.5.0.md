@@ -47,4 +47,4 @@
 - 覆盖安装后无障碍启用项可能被系统清掉，请在「设置 → 更多 → 手机能力 → 打开无障碍设置」重新打开。
 - 老版本的接口配置会保留；如果换了供应商，记得在设置页确认**协议**与 Base URL 匹配（页面会显示“当前适配”）。
 
-**完整哈希与安装说明**见 Release 资产 `SHA256SUMS` 与 [`docs/INSTALL.md`](INSTALL.md)；版本历史见 [`CHANGELOG.md`](../CHANGELOG.md)。
+**完整哈希与安装说明**见 Release 资产 `SHA256SUMS` 与 [`docs/INSTALL.md`](https://github.com/wuy489934-svg/DLA/blob/main/docs/INSTALL.md)；版本历史见 [`CHANGELOG.md`](https://github.com/wuy489934-svg/DLA/blob/main/CHANGELOG.md)。
