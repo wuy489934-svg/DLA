@@ -238,6 +238,7 @@ class SessionStore(context: Context) {
         tools: List<Block.Tool>,
         status: String,
         mode: String = "llm",
+        usage: UsageStats? = null,
     ) {
         ensure(sessionId, mode)
         val json = read(sessionId) ?: return
@@ -268,8 +269,20 @@ class SessionStore(context: Context) {
                 .put("role", "assistant")
                 .put("blocks", blocks)
                 .put("status", status)
+                .put("elapsedMs", usage?.turnMs ?: 0L)
                 .put("createdAt", System.currentTimeMillis())
         )
+        // 用量落到会话文件：重开会话时用量条 / 「本轮」耗时还能显示上一次的值
+        if (usage != null) {
+            json.put(
+                "usageStats",
+                JSONObject()
+                    .put("rounds", usage.rounds)
+                    .put("steps", usage.steps)
+                    .put("contextTokens", usage.contextTokens)
+                    .put("turnMs", usage.turnMs),
+            )
+        }
         json.put("updatedAt", System.currentTimeMillis())
         write(sessionId, json)
     }

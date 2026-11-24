@@ -13,8 +13,8 @@ if (hasReleaseKey) {
     keystorePropsFile.withInputStream { keystoreProps.load(it) }
 }
 
-def dlaVersionCode = (findProperty('dlaVersionCode') ?: '42').toString().toInteger()
-def dlaVersionName = (findProperty('dlaVersionName') ?: '3.0').toString()
+def dlaVersionCode = (findProperty('dlaVersionCode') ?: '44').toString().toInteger()
+def dlaVersionName = (findProperty('dlaVersionName') ?: '3.1.2').toString()
 
 // Python 运行时（Chaquopy）：构建机上的 Python 必须与 chaquopy.version 的主次版本一致。
 // 本机默认用 DSH 自带的 3.12；可用 -PdlaBuildPython=… / -PdlaPythonVersion=… 覆盖。

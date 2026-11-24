@@ -136,6 +136,17 @@ object Lang {
         "调用工具执行" to "Runs tools for you",
         "还没有会话" to "No sessions yet",
         "上面选一个模式开始" to "Pick a mode above to start",
+        "点上面「新对话」开始" to "Tap New chat above to start",
+        "两个分区各自保存会话，互不混排" to "Each mode keeps its own sessions",
+        "%d 个会话" to "%d session|%d sessions",
+        // ---- Agent 用量条 ----
+        "上下文" to "Context",
+        "本轮 %s" to "Turn %s",
+        "上下文窗口（Agent 区用量条用）" to "Context window (Agent usage bar)",
+        // ---- Agent 工具身份（3.1.2） ----
+        "身份：%s" to "Identity: %s",
+        "应用身份（无特权）" to "App identity (no privileges)",
+        "Shizuku（uid 2000）" to "Shizuku (uid 2000)",
         "新对话" to "New chat",
         "会话" to "Session",
         "图片" to "Image",

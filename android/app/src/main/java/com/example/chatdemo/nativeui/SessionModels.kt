@@ -55,6 +55,8 @@ data class ChatMessage(
     val model: String? = null,
     /** 用户消息携带的附件，来自 JSON 的 files 字段 */
     val attachments: List<Attachment> = emptyList(),
+    /** 这一轮从开始到结束的实际耗时（助手消息落盘时记录） */
+    val elapsedMs: Long = 0L,
 )
 
 /** 一条附件：图片走 data URL，文本类文档直接带正文 */
@@ -87,6 +89,22 @@ data class SessionDetail(
     val draft: String = "",
     /** Agent 的计划/笔记，跨轮次（点「继续」）恢复用 */
     val taskState: TaskState? = null,
+    /** 最近一轮的用量（轮/步、上下文占用、单轮耗时） */
+    val usageStats: UsageStats? = null,
+)
+
+/**
+ * 一次助手回复落盘的用量数据。
+ *
+ * - rounds / steps：这一轮 Agent 迭代了几轮、调了几次工具；
+ * - contextTokens：最后一次请求的上下文 token（input + cache + output）；
+ * - turnMs：这一轮从用户发出到结束的实际耗时，**只记这一轮，不累计**。
+ */
+data class UsageStats(
+    val rounds: Int = 0,
+    val steps: Int = 0,
+    val contextTokens: Int = 0,
+    val turnMs: Long = 0L,
 )
 
 /** Agent 任务状态：计划、当前步、笔记 */
@@ -167,8 +185,27 @@ object SessionParser {
             messages = messages,
             draft = json.str("draft"),
             taskState = taskState(json.optJSONObject("taskState")),
+            usageStats = usageStats(json.optJSONObject("usageStats")),
         )
     }.getOrNull()
+
+    /** 用量统计：老会话没有这个字段，返回 null */
+    private fun usageStats(json: JSONObject?): UsageStats? {
+        if (json == null) return null
+        val stats = UsageStats(
+            rounds = json.optInt("rounds", 0),
+            steps = json.optInt("steps", 0),
+            contextTokens = json.optInt("contextTokens", 0),
+            turnMs = json.optLong("turnMs", 0L),
+        )
+        return if (stats.rounds == 0 && stats.steps == 0 &&
+            stats.contextTokens == 0 && stats.turnMs == 0L
+        ) {
+            null
+        } else {
+            stats
+        }
+    }
 
     private fun taskState(json: JSONObject?): TaskState? {
         if (json == null) return null
@@ -207,6 +244,7 @@ object SessionParser {
             status = if (json.has("status")) json.str("status") else null,
             model = if (json.isNull("model")) null else json.optString("model").ifEmpty { null },
             attachments = attachments(json),
+            elapsedMs = json.optLong("elapsedMs", 0L),
         )
     }
 

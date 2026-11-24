@@ -25,9 +25,6 @@ cd android
 ./gradlew assembleDebug
 ```
 
-The Gradle task `syncWebAssets` copies `web/dist` into
-`android/app/src/main/assets/public` before packaging.
-
 For a release build, provide a signing key outside the repository:
 
 ```bash
@@ -45,7 +42,7 @@ EOF
 
 ## Windows notes
 
-The project path must not contain characters that break the Android toolchain. Prefer a short ASCII path such as `C:\src\dla`. The repository itself is path-agnostic; the old private build used a non-ASCII workspace and required a junction for the SDK.
+The project path must not contain characters that break the Android toolchain. Prefer a short ASCII path such as `C:\src\dla`. The repository itself is path-agnostic; if the workspace path contains non-ASCII characters, a junction for the SDK may be needed.
 
 ## Outputs
 

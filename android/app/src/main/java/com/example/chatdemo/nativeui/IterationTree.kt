@@ -66,11 +66,14 @@ fun IterationTree(
     rounds: List<IterationRound>,
     modifier: Modifier = Modifier,
     onLocate: ((Int) -> Unit)? = null,
+    /** 这一轮从开始到结束的真实耗时；0 表示老数据，退回按工具耗时求和 */
+    totalMs: Long = 0L,
 ) {
     var expanded by remember(rounds) { mutableStateOf(false) }
     var openRound by remember(rounds) { mutableStateOf<Int?>(null) }
     val totalSteps = rounds.sumOf { it.tools.size }
-    val totalMs = rounds.sumOf { round -> round.tools.sumOf { it.elapsedMs } }
+    val toolMs = rounds.sumOf { round -> round.tools.sumOf { it.elapsedMs } }
+    val shownMs = if (totalMs > 0) totalMs else toolMs
 
     Card(
         modifier = modifier
@@ -119,9 +122,9 @@ fun IterationTree(
                     Spacer(Modifier.width(4.dp))
                     Tag(Lang.t("%d 步", totalSteps))
                     Spacer(Modifier.weight(1f))
-                    if (totalMs > 0) {
+                    if (shownMs > 0) {
                         Text(
-                            formatElapsed(totalMs),
+                            formatElapsed(shownMs),
                             color = DlaColors.TextDim,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,

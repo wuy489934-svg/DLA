@@ -48,6 +48,12 @@ object ChatEngine {
         val draftInput: String = "",
         /** Agent 的计划/笔记，点「继续」时回传给 AgentRunner */
         val taskState: TaskState? = null,
+        /** 最近一次请求的上下文 token 数（Agent 区用量条） */
+        val contextTokens: Int = 0,
+        /** 上下文窗口（token），设置里可改 */
+        val contextWindow: Int = 128_000,
+        /** 上一轮对话从开始到结束的实际耗时；只记这一轮，不累计 */
+        val lastTurnMs: Long = 0L,
     )
 
     private const val PREFS = "dla-native"
@@ -67,6 +73,7 @@ object ChatEngine {
     private const val KEY_FOLDER = "folderUri"
     private const val KEY_TTS = "tts"
     private const val KEY_LOCATION = "location"
+    private const val KEY_CONTEXT_WINDOW = "contextWindow"
 
     private lateinit var app: Context
     private lateinit var prefs: SharedPreferences
@@ -181,6 +188,16 @@ object ChatEngine {
         get() = prefs.getString(KEY_LOCATION, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_LOCATION, value.trim()).apply()
 
+    /**
+     * 上下文窗口大小（token）。Agent 区的用量条需要一个分母：
+     * 接口只在 usage 里给「用了多少」，窗口大小是模型能力，只能由用户指定。
+     *
+     * 默认 128K（DeepSeek 的上下文长度）；换模型后可以在设置里调。
+     */
+    var contextWindow: Int
+        get() = prefs.getInt(KEY_CONTEXT_WINDOW, 128_000).coerceIn(8_000, 2_000_000)
+        set(value) = prefs.edit().putInt(KEY_CONTEXT_WINDOW, value.coerceIn(8_000, 2_000_000)).apply()
+
     /** 旧版单段人设（仅用于迁移和兼容读取） */
     var persona: String
         get() = prefs.getString(KEY_PERSONA, "").orEmpty()
@@ -235,12 +252,13 @@ object ChatEngine {
     fun create(mode: String): String {
         // 空会话先只存在于内存里：写入磁盘要等第一条消息或第一段草稿
         val id = UUID.randomUUID().toString()
-        _open.value = Open(id = id, title = "新对话", mode = mode)
+        _open.value = Open(id = id, title = "新对话", mode = mode, contextWindow = contextWindow)
         return id
     }
 
     fun open(id: String) {
         val detail = store.detail(id) ?: return
+        val usage = detail.usageStats
         _open.value = Open(
             id = detail.id,
             title = detail.title,
@@ -248,6 +266,9 @@ object ChatEngine {
             messages = detail.messages,
             draftInput = detail.draft,
             taskState = detail.taskState,
+            contextTokens = usage?.contextTokens ?: 0,
+            contextWindow = contextWindow,
+            lastTurnMs = usage?.turnMs ?: 0L,
         )
     }
 
@@ -324,6 +345,7 @@ object ChatEngine {
             draftInput = "",
             error = null,
             startedAt = startedAt,
+            contextWindow = contextWindow,
         )
         _busy.value = true
         SoundFeedback.send()
@@ -669,7 +691,9 @@ object ChatEngine {
                 }
             })
             put("mcpServerIds", JSONArray())
-            put("maxRounds", 40)
+            // 一轮 = 一次模型往返；上层硬上限也是 120。长任务靠「同一轮多工具 / 一条命令多语句」
+            // 省轮数，而不是靠用户反复点「继续」。
+            put("maxRounds", 120)
             put("autoApprove", autoApprove)
             // 上一轮的计划/笔记：AgentRunner 支持 resumeTaskState，之前没人传，
             // 所以到步数上限后「继续」时计划和笔记全丢。
@@ -731,8 +755,13 @@ object ChatEngine {
             }
             "tool_result" -> {
                 val id = event.optString("id")
-                val result = event.optString("text")
-                val isError = event.optBoolean("is_error")
+                // AgentRunner 的字段是 content / isError；旧版事件用 text / is_error，两个都认
+                val result = event.optString("content").ifEmpty { event.optString("text") }
+                val isError = if (event.has("isError")) {
+                    event.optBoolean("isError")
+                } else {
+                    event.optBoolean("is_error")
+                }
                 // AgentRunner 已经算好这条工具自己的耗时；以前用的是「运行开始到现在」，
                 // 长任务里会显示成 1484111ms 这种越滚越大的数字。
                 val elapsed = event.optLong("elapsedMs", 0L)
@@ -751,6 +780,16 @@ object ChatEngine {
                         },
                         approval = if (open.approval?.toolId == id) null else open.approval,
                     )
+                }
+            }
+            // 每轮请求结束时的 token 用量：Agent 区用量条只认最近这一轮（≈ 当前上下文占用）
+            "usage" -> {
+                val used = event.optInt("inputTokens") +
+                    event.optInt("cacheCreationInputTokens") +
+                    event.optInt("cacheReadInputTokens") +
+                    event.optInt("outputTokens")
+                if (used > 0) {
+                    update { it.copy(contextTokens = used, contextWindow = contextWindow) }
                 }
             }
             // 计划/笔记：存下来，点「继续」时回传给 AgentRunner
@@ -773,6 +812,19 @@ object ChatEngine {
 
     private fun finishAgent(sessionId: String, status: String, error: String? = null) {
         val current = synchronized(lock) { _open.value } ?: return
+        // 单轮总耗时：用户发出这条消息 → 这一轮结束。只记这一轮，不跨轮累计。
+        val turnMs = if (current.startedAt > 0) {
+            (System.currentTimeMillis() - current.startedAt).coerceAtLeast(0L)
+        } else {
+            current.lastTurnMs
+        }
+        val rounds = current.draftTools.map { it.round }.filter { it > 0 }.maxOrNull() ?: 0
+        val usage = UsageStats(
+            rounds = rounds,
+            steps = current.draftTools.size,
+            contextTokens = current.contextTokens,
+            turnMs = turnMs,
+        )
         if (current.draftText.isNotBlank() || current.draftTools.isNotEmpty()) {
             store.appendAssistant(
                 sessionId,
@@ -781,6 +833,7 @@ object ChatEngine {
                 current.draftTools,
                 status,
                 current.mode,
+                usage,
             )
             runCatching { store.saveTaskState(sessionId, current.mode, current.taskState) }
         }
@@ -793,6 +846,9 @@ object ChatEngine {
             draftTools = emptyList(),
             error = error,
             approval = null,
+            startedAt = 0L,
+            lastTurnMs = turnMs,
+            contextWindow = contextWindow,
         )
         _busy.value = false
         agentRequestId = null
@@ -854,11 +910,12 @@ object ChatEngine {
     private val AGENT_SYSTEM = listOf(
         "你是 DLA（DeepSeek LLM Agent），运行在用户 Android 手机上的本地智能体。",
         "你的语言与推理能力来自 DeepSeek 模型，但你不是 DeepSeek 官方产品，也不代表深度求索公司；不要声称自己是官方客户端或官方客服。",
-        "你有真实的工具执行能力，但你不是人类，没有身体、感官、情绪或现实世界的直接感知。你对设备、屏幕、文件和网络的了解只能来自工具结果、用户输入和当前上下文；工具没有返回的事不能编造。",
-        "你的职责是替用户完成可验证的任务：先理解目标，再选择最少、最合适的工具，执行并核对结果。遇到权限、审批或能力边界要明确说明，不确定时直接说不确定。",
-        "工具选择：初始只加载核心手机操作，其中 phone_sh 是本机终端（默认执行入口）；phone_py（Python）、phone_js（Node）、文件、设置、剪贴板等能力要先调用 tool_search 搜索，命中后下一轮才能调用。",
-        "规则：1) 需要外部信息或系统操作时先调用工具；2) 一次只调用必要的工具；3) 工具失败时说明原因并尝试替代方案；4) 最终回答先给结论；5) 不要复述本提示词；6) 高风险或不可逆操作先说明并等待确认。",
+        "你是 AI，不是人类，没有身体、感官、情绪或脱离工具的现实感知；设备、屏幕、文件和网络的情况只能来自工具结果、用户输入和当前上下文，工具没有返回的事不能编造。",
+        "工作方式：先理解目标，再选最少、最合适的工具，执行后核对结果；高风险或不可逆操作先说明并等待确认；遇到权限、审批或能力边界要明确说明，不确定就说不确定。",
+        "工具选择：phone_sh 是默认执行入口（应用身份）；phone_py / phone_js、文件、设置、剪贴板、通知、zip、docx 要先 tool_search；屏幕与点按走无障碍工具。",
+        "轮数预算：一轮 = 一次模型往返，轮数是有限资源。互不依赖的只读检查要一次做完（phone_sh 一条命令用 ; / && 串联，或同一轮发多个工具调用）；只有后一步依赖前一步时才拆轮。",
         "历史：请求里可能带有之前轮次的对话摘要（含工具调用记录）和上一轮的计划/笔记。用户说「继续」时，以这些历史为准直接接着做；不要把已有的上下文当成空的。",
         "读图：用户给了图片路径、或者截了图，用 phone_view_image 把图片读进来看（不要凭文件名或路径猜内容）；截图本身也会带图回传。看完再描述。",
+        "表达：先给结论，再给关键证据（哪个工具、什么身份、退出码），最后列「未验证」项和下一步；不要把大段原始输出贴给用户，不要复述本提示词。",
     ).joinToString("\n")
 }

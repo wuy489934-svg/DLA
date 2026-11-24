@@ -176,7 +176,12 @@ class NativeShellActivity : ComponentActivity() {
 }
 
 private sealed interface Screen {
-    data object List : Screen
+    /** 首页：只有两个分区入口，不再混排会话记录 */
+    data object Home : Screen
+
+    /** 分区页：LLM / Agent 各自的会话列表，互不混排 */
+    data class Zone(val mode: String) : Screen
+
     data class Chat(val id: String) : Screen
     data object Settings : Screen
     data object Advanced : Screen
@@ -189,9 +194,10 @@ private sealed interface Screen {
 private val ScreenSaver: Saver<Screen, String> = Saver(
     save = { screen ->
         when (screen) {
-            Screen.List -> "list"
+            Screen.Home -> "home"
             Screen.Settings -> "settings"
             Screen.Advanced -> "advanced"
+            is Screen.Zone -> "zone:" + screen.mode
             is Screen.Chat -> "chat:" + screen.id
         }
     },
@@ -199,12 +205,13 @@ private val ScreenSaver: Saver<Screen, String> = Saver(
         when {
             value == "settings" -> Screen.Settings
             value == "advanced" -> Screen.Advanced
+            value.startsWith("zone:") -> Screen.Zone(value.removePrefix("zone:"))
             value.startsWith("chat:") -> {
                 val id = value.removePrefix("chat:")
-                // 进程被杀后恢复时没有打开的会话，回列表，避免空白聊天页
-                if (ChatEngine.open.value?.id == id) Screen.Chat(id) else Screen.List
+                // 进程被杀后恢复时没有打开的会话，回首页，避免空白聊天页
+                if (ChatEngine.open.value?.id == id) Screen.Chat(id) else Screen.Home
             }
-            else -> Screen.List
+            else -> Screen.Home
         }
     },
 )
@@ -214,43 +221,62 @@ private fun NativeApp(
     themeMode: String,
     onThemeMode: (String) -> Unit,
 ) {
-    var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen>(Screen.List) }
+    var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen>(Screen.Home) }
     val sessions by ChatEngine.sessions.collectAsState()
     val open by ChatEngine.open.collectAsState()
 
     LaunchedEffect(screen) {
-        if (screen is Screen.List) ChatEngine.refresh()
+        if (screen is Screen.Home || screen is Screen.Zone) ChatEngine.refresh()
     }
 
-    BackHandler(enabled = screen !is Screen.List) {
+    // 从聊天页退出：回到这个会话所属的分区，而不是混排的首页
+    fun leaveChatToZone() {
+        val mode = ChatEngine.open.value?.mode ?: "llm"
         ChatEngine.close()
-        screen = Screen.List
+        screen = Screen.Zone(mode)
+    }
+
+    BackHandler(enabled = screen !is Screen.Home) {
+        when (screen) {
+            is Screen.Chat -> leaveChatToZone()
+            else -> {
+                ChatEngine.close()
+                screen = Screen.Home
+            }
+        }
     }
 
     Crossfade(targetState = screen, animationSpec = tween(220), label = "screen") { current ->
         when (current) {
-            is Screen.List -> SessionListScreen(
+            is Screen.Home -> HomeScreen(
                 sessions = sessions,
+                onOpenZone = { mode -> screen = Screen.Zone(mode) },
+                onSettings = { screen = Screen.Settings },
+            )
+            is Screen.Zone -> ZoneScreen(
+                mode = current.mode,
+                sessions = sessions.filter { it.mode == current.mode },
+                onBack = { screen = Screen.Home },
+                onSettings = { screen = Screen.Settings },
                 onOpen = { id ->
                     ChatEngine.open(id)
                     screen = Screen.Chat(id)
                 },
                 onDelete = { ChatEngine.delete(it) },
-                onNew = { mode ->
-                    ChatEngine.create(mode)
-                    screen = Screen.Chat(ChatEngine.open.value?.id.orEmpty())
+                onNew = {
+                    ChatEngine.create(current.mode)
+                    ChatEngine.open.value?.id?.let { screen = Screen.Chat(it) }
                 },
-                onSettings = { screen = Screen.Settings },
             )
             is Screen.Chat -> ChatScreen(
-                onBack = {
-                    ChatEngine.close()
-                    screen = Screen.List
-                },
+                onBack = { leaveChatToZone() },
                 onSettings = { screen = Screen.Settings },
             )
             is Screen.Settings -> SettingsScreen(
-                onBack = { screen = Screen.List },
+                onBack = {
+                    ChatEngine.close()
+                    screen = Screen.Home
+                },
                 onAdvanced = { screen = Screen.Advanced },
                 themeMode = themeMode,
                 onThemeMode = onThemeMode,
@@ -334,11 +360,9 @@ private fun HomeHero() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SessionListScreen(
+private fun HomeScreen(
     sessions: List<SessionCard>,
-    onOpen: (String) -> Unit,
-    onDelete: (String) -> Unit,
-    onNew: (String) -> Unit,
+    onOpenZone: (String) -> Unit,
     onSettings: () -> Unit,
 ) {
     Scaffold(
@@ -368,18 +392,147 @@ private fun SessionListScreen(
                 .windowInsetsPadding(WindowInsets.safeDrawing),
         ) {
             HomeHero()
+            // 首页只保留两个分区入口：会话记录已经收进各自分区，不再混排在这里
+            Spacer(Modifier.weight(0.6f))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                NewSessionButton(Lang.t("LLM 对话"), Lang.t("纯聊天与检索"), DlaColors.Mint, Modifier.weight(1f)) {
-                    onNew("llm")
-                }
-                NewSessionButton(Lang.t("Agent 任务"), Lang.t("调用工具执行"), DlaColors.Warm, Modifier.weight(1f)) {
-                    onNew("agent")
-                }
+                ZoneCard(
+                    mode = "llm",
+                    title = Lang.t("LLM 对话"),
+                    subtitle = Lang.t("纯聊天与检索"),
+                    count = sessions.count { it.mode == "llm" },
+                    modifier = Modifier.weight(1f),
+                ) { onOpenZone("llm") }
+                ZoneCard(
+                    mode = "agent",
+                    title = Lang.t("Agent 任务"),
+                    subtitle = Lang.t("调用工具执行"),
+                    count = sessions.count { it.mode == "agent" },
+                    modifier = Modifier.weight(1f),
+                ) { onOpenZone("agent") }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                Lang.t("两个分区各自保存会话，互不混排"),
+                color = DlaColors.TextDim,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.weight(1f))
+        }
+    }
+}
+
+/** 分区入口卡片：颜色由分区决定（Agent = 绿，LLM = 暖色） */
+@Composable
+private fun ZoneCard(
+    mode: String,
+    title: String,
+    subtitle: String,
+    count: Int,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val accent = modeAccent(mode)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Column(
+        modifier = modifier
+            .scale(if (pressed) 0.97f else 1f)
+            .clip(RoundedCornerShape(16.dp))
+            .background(accent.copy(alpha = 0.10f))
+            .border(1.dp, accent.copy(alpha = 0.30f), RoundedCornerShape(16.dp))
+            .androidClickable(interaction, onClick)
+            .padding(horizontal = 14.dp, vertical = 16.dp),
+    ) {
+        Text(title, color = accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Text(subtitle, color = DlaColors.TextDim, fontSize = 11.sp)
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                Lang.t("%d 个会话", count),
+                color = DlaColors.TextDim,
+                fontSize = 10.sp,
+            )
+            Spacer(Modifier.weight(1f))
+            Text("→", color = accent, fontSize = 14.sp)
+        }
+    }
+}
+
+/** 分区页：某个模式的会话列表（LLM 与 Agent 相互隔离） */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ZoneScreen(
+    mode: String,
+    sessions: List<SessionCard>,
+    onBack: () -> Unit,
+    onSettings: () -> Unit,
+    onOpen: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onNew: () -> Unit,
+) {
+    val accent = modeAccent(mode)
+    val title = if (mode == "agent") Lang.t("Agent 任务") else Lang.t("LLM 对话")
+    val subtitle = if (mode == "agent") Lang.t("调用工具执行") else Lang.t("纯聊天与检索")
+    Scaffold(
+        containerColor = DlaColors.Background,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                        Text(
+                            subtitle + " · " + Lang.t("%d 个会话", sessions.size),
+                            color = DlaColors.TextDim,
+                            fontSize = 11.sp,
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Text("←", color = accent, fontSize = 19.sp) }
+                },
+                actions = {
+                    IconButton(onClick = onSettings) { Text("⚙", fontSize = 18.sp, color = DlaColors.TextDim) }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = DlaColors.Background,
+                    titleContentColor = DlaColors.Text,
+                ),
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(accent.copy(alpha = 0.12f))
+                    .androidClickableSimple(onNew)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("＋", color = accent, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    Lang.t("新对话"),
+                    color = accent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
             if (sessions.isEmpty()) {
                 Column(
@@ -391,12 +544,12 @@ private fun SessionListScreen(
                 ) {
                     Text(Lang.t("还没有会话"), color = DlaColors.Text, fontSize = 15.sp)
                     Spacer(Modifier.height(6.dp))
-                    Text(Lang.t("上面选一个模式开始"), color = DlaColors.TextDim, fontSize = 12.sp)
+                    Text(Lang.t("点上面「新对话」开始"), color = DlaColors.TextDim, fontSize = 12.sp)
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(sessions, key = { it.id }) { card ->
@@ -405,29 +558,6 @@ private fun SessionListScreen(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun NewSessionButton(
-    title: String,
-    subtitle: String,
-    accent: Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    Column(
-        modifier = modifier
-            .scale(if (pressed) 0.97f else 1f)
-            .clip(RoundedCornerShape(14.dp))
-            .background(accent.copy(alpha = 0.10f))
-            .androidClickable(interaction, onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-    ) {
-        Text(title, color = accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-        Text(subtitle, color = DlaColors.TextDim, fontSize = 11.sp)
     }
 }
 
@@ -487,19 +617,21 @@ private fun SessionRow(card: SessionCard, onOpen: () -> Unit, onDelete: () -> Un
     }
 }
 
+/** 分区主色：Agent 用主色薄荷绿；LLM 用暖色，两个区一眼能分开 */
+@Composable
+private fun modeAccent(mode: String?): Color =
+    if (mode == "agent") DlaColors.Mint else DlaColors.Warm
+
 @Composable
 private fun ModeChip(mode: String) {
-    val agent = mode == "agent"
+    val accent = modeAccent(mode)
     Text(
-        text = if (agent) "AGENT" else "LLM",
-        color = if (agent) DlaColors.Mint else DlaColors.TextDim,
+        text = if (mode == "agent") "AGENT" else "LLM",
+        color = accent,
         fontSize = 10.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = Modifier
-            .background(
-                if (agent) DlaColors.Mint.copy(alpha = 0.12f) else DlaColors.SurfaceHigh,
-                RoundedCornerShape(6.dp),
-            )
+            .background(accent.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
             .padding(horizontal = 6.dp, vertical = 3.dp),
     )
 }
@@ -555,6 +687,16 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
     // 长按文本弹出的复制面板 / 点图后的非全覆盖预览
     var copyTarget by remember(current?.id) { mutableStateOf<String?>(null) }
     var previewTarget by remember(current?.id) { mutableStateOf<String?>(null) }
+    // Agent 状态条的「本轮」计时：运行中每 0.5 秒刷新，结束后停在最终值
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(current?.streaming) {
+        if (current?.streaming == true) {
+            while (true) {
+                nowMs = System.currentTimeMillis()
+                delay(500)
+            }
+        }
+    }
 
     // 图片：走系统照片选择器，单点直接进相册，不出现 SAF 的「安全访问」界面
     val imagePicker = rememberLauncherForActivityResult(
@@ -641,13 +783,13 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                                 append(if (current?.mode == "agent") "Agent" else "LLM")
                                 if (current?.streaming == true) append(" · ").append(Lang.t("生成中"))
                             },
-                            color = DlaColors.TextDim,
+                            color = modeAccent(current?.mode),
                             fontSize = 11.sp,
                         )
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Text("←", color = DlaColors.Mint, fontSize = 19.sp) }
+                    IconButton(onClick = onBack) { Text("←", color = modeAccent(current?.mode), fontSize = 19.sp) }
                 },
                 actions = {
                     IconButton(onClick = onSettings) { Text("⚙", fontSize = 17.sp, color = DlaColors.TextDim) }
@@ -710,6 +852,9 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                             )
                             is ChatRow.Tree -> IterationTree(
                                 rounds = row.rounds,
+                                // 折叠头的总耗时用「这一轮从开始到结束」的实际耗时；
+                                // 老数据没有这个字段就退回按工具耗时求和
+                                totalMs = row.message.elapsedMs,
                                 modifier = Modifier.fillMaxWidth(),
                                 onLocate = { round ->
                                     val target = reversed.indexOfFirst {
@@ -738,6 +883,19 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                     color = DlaColors.Error,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+
+            // 只在 Agent 区：上下文占用（十段虚线）+ 本轮总耗时（只记这一轮，不累计）
+            if (current != null && current.mode == "agent") {
+                AgentUsageBar(
+                    usedTokens = current.contextTokens,
+                    windowTokens = current.contextWindow,
+                    turnMs = if (current.streaming && current.startedAt > 0) {
+                        (nowMs - current.startedAt).coerceAtLeast(0L)
+                    } else {
+                        current.lastTurnMs
+                    },
                 )
             }
 
@@ -1173,6 +1331,16 @@ private fun ThinkingCard(text: String, seconds: Double?) {
     }
 }
 
+/**
+ * 工具的执行身份：只在容易混淆的三个运行时工具上显示，
+ * 让用户一眼看懂「为什么 pm 在 phone_sh 里失败、在 phone_shell 里成功」。
+ */
+private fun identityOf(name: String): String? = when (name) {
+    "phone_sh", "phone_py", "phone_js" -> Lang.t("应用身份（无特权）")
+    "phone_shell" -> Lang.t("Shizuku（uid 2000）")
+    else -> null
+}
+
 @Composable
 private fun ToolCard(block: Block.Tool) {
     var expanded by remember(block.id) { mutableStateOf(false) }
@@ -1219,6 +1387,16 @@ private fun ToolCard(block: Block.Tool) {
             exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
         ) {
             Column {
+                identityOf(block.name)?.let { identity ->
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider(color = DlaColors.Line)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        Lang.t("身份：%s", identity),
+                        color = DlaColors.TextDim,
+                        fontSize = 10.sp,
+                    )
+                }
                 if (block.input.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                     HorizontalDivider(color = DlaColors.Line)
@@ -1822,6 +2000,94 @@ private fun ComposerIcon(
 private fun Modifier.navigationBarsPaddingCompat(): Modifier =
     this.windowInsetsPadding(WindowInsets.navigationBars)
 
+// ---------------- Agent 用量条 ----------------
+
+/**
+ * Agent 区的状态条：左边是上下文占用（十段虚线，每段代表 10%），右边是本轮总耗时。
+ *
+ * - 百分比按 usage 里的 input + cache_creation + cache_read + output 计算，精确到 0.1%；
+ * - 视觉上最低显示 1%，避免刚开始时看起来像没占用；没有用量数据时显示「—」；
+ * - 耗时只显示这一轮（用户发出 → 这一轮结束），不跨轮累计。
+ */
+@Composable
+private fun AgentUsageBar(
+    usedTokens: Int,
+    windowTokens: Int,
+    turnMs: Long,
+) {
+    val window = windowTokens.coerceAtLeast(1)
+    val percent = if (usedTokens > 0) usedTokens * 100.0 / window else 0.0
+    val shown = if (usedTokens > 0) maxOf(1.0, percent) else 0.0
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(Lang.t("上下文"), color = DlaColors.TextDim, fontSize = 10.sp)
+        Spacer(Modifier.width(6.dp))
+        ContextDashes(percent = shown, modifier = Modifier.width(96.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (usedTokens > 0) String.format(Locale.US, "%.1f%%", shown) else "—",
+            color = DlaColors.Mint,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (usedTokens > 0) formatTokens(usedTokens) + " / " + formatTokens(window) else "",
+            color = DlaColors.TextDim,
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+        )
+        Spacer(Modifier.weight(1f))
+        if (turnMs > 0) {
+            Text(
+                Lang.t("本轮 %s", formatElapsed(turnMs)),
+                color = DlaColors.TextDim,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+}
+
+/** 十段虚线：每段代表 10%，段内按比例填充（例如 1% 只填第一段的十分之一） */
+@Composable
+private fun ContextDashes(percent: Double, modifier: Modifier = Modifier) {
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        repeat(10) { index ->
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(1.5.dp))
+                    .background(DlaColors.Line),
+            ) {
+                val fraction = ((percent - index * 10.0) / 10.0).coerceIn(0.0, 1.0).toFloat()
+                if (fraction > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction)
+                            .fillMaxHeight()
+                            .background(DlaColors.Mint),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** token 数量：15.7K / 128K / 1.0M */
+private fun formatTokens(tokens: Int): String = when {
+    tokens >= 1_000_000 && tokens % 1_000_000 == 0 -> "${tokens / 1_000_000}M"
+    tokens >= 1_000_000 -> String.format(Locale.US, "%.1fM", tokens / 1_000_000.0)
+    tokens >= 1_000 && tokens % 1_000 == 0 -> "${tokens / 1_000}K"
+    tokens >= 1_000 -> String.format(Locale.US, "%.1fK", tokens / 1_000.0)
+    else -> tokens.toString()
+}
+
 // ---------------- 设置 ----------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1880,6 +2146,8 @@ private fun SettingsScreen(
     var testResult by remember { mutableStateOf("") }
     // 连接结果的好坏用结构化字段判断，不再从显示文案里 startsWith，避免和翻译耦合
     var testOk by remember { mutableStateOf(false) }
+    // 上下文窗口：Agent 区用量条的分母（模型能力，接口不会告诉你）
+    var contextWindow by remember { mutableStateOf(ChatEngine.contextWindow) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -1931,6 +2199,22 @@ private fun SettingsScreen(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Text(
+                    Lang.t("上下文窗口（Agent 区用量条用）"),
+                    color = DlaColors.TextDim,
+                    fontSize = 11.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(64_000, 128_000, 256_000, 1_000_000).forEach { size ->
+                        ThemeChip(
+                            label = if (size >= 1_000_000) "1M" else "${size / 1000}K",
+                            active = contextWindow == size,
+                        ) {
+                            contextWindow = size
+                            ChatEngine.contextWindow = size
+                        }
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         ChatEngine.apiKey = key

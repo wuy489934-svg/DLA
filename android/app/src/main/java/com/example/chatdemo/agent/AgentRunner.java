@@ -179,18 +179,48 @@ public final class AgentRunner {
         return true;
     }
 
-    /** 固定的能力地图：短、稳、不进 tool_search 结果，避免模型在末尾才发现对的能力。 */
+    /**
+     * 调用指南：身份边界、查应用的正确工具、负证据规则、先测再断言、批量执行。
+     *
+     * 3.1.2 重写的原因：模型曾把 phone_shell（Shizuku, uid 2000）跑通的 pm 结论说成
+     * 「应用身份也能用」，又拿 ps -A / 端口探测去判断 Shizuku 是否在运行。
+     * 这两类错误的共同点是「身份」和「证据」没对齐，所以指南按这两条主轴组织。
+     */
     private static final String TOOL_MAP =
-            "【能力地图（先看这里再决定调用什么，不要反复猜工具名）】\n"
-            + "- 屏幕与输入：看界面 phone_screen、截图 phone_screenshot、点文字 phone_tap_text、"
-            + "点坐标 phone_tap、滑动 phone_swipe、输入 phone_input、按键 phone_key。"
-            + "这些走系统无障碍服务，不需要 Shizuku。工具不在列表里就说明无障碍没开，"
-            + "直接让用户去「设置 → 无障碍 → 已下载的应用」打开 DLA，不要换别的工具硬试。\n"
-            + "- 执行命令：phone_sh 是应用身份的本机终端，默认用它；只有 pm / am / settings / dumpsys "
-            + "这类特权命令才用 phone_shell（需要 Shizuku，未就绪时不会出现）。\n"
-            + "- 脚本：phone_py（Python）、phone_js（Node）先 tool_search 一次再调用。\n"
-            + "- 文件、设置、剪贴板、通知、zip、docx：先 tool_search。\n"
-            + "- 工具缺失时只说明「缺哪个后端、怎么开启」，不要连续换关键词反复试探同一能力。";
+            "【调用指南（先看这里，别靠猜）】\n"
+            + "1) 三种身份，不要混：\n"
+            + "   · phone_sh / phone_py / phone_js = 应用身份（untrusted_app）。能读自身目录与 /sdcard、"
+            + "跑 grep/find/awk/sed、getprop、curl、node/python；不能跑 pm、am、settings、dumpsys，"
+            + "也看不到 /proc 全局、/data/app、别家应用私有目录（会被 SELinux 拒绝，报错形如 "
+            + "\"Failure calling service ...\" 或 \"Permission Denial\"）。\n"
+            + "   · phone_shell = Shizuku（uid 2000 系统 shell）。pm / am / settings / dumpsys / 全系统 ps "
+            + "只在这里可用；它不在工具列表里就说明 Shizuku 没就绪。\n"
+            + "   · phone_screen / phone_screenshot / phone_tap* / phone_swipe / phone_input / phone_key = 无障碍，"
+            + "只做界面操作，不提供系统信息。\n"
+            + "   铁律：phone_shell 跑通不等于「应用身份可用」；phone_sh 失败也不等于「本机做不到」——先换对身份再下结论。\n"
+            + "2) 查应用：包名/应用名用 phone_apps（PackageManager 接口，任何身份都能用）；versionCode、"
+            + "APK 路径、安装来源、签名、targetSdk 只有 phone_shell 的 pm / dumpsys 拿得到；没有 Shizuku 就直说拿不到，"
+            + "并给出去「设置 → 手机能力」开启的路径。\n"
+            + "3) 负证据无效：应用身份的 ps -A 只有自己那 3~4 个进程；/proc/net/tcp、ss、netstat、/data/app、"
+            + "/proc/<别人的 pid> 都读不到。所以「没看到」不等于「没在跑」，端口探测失败不等于服务没开。"
+            + "判断 Shizuku 只看【本机运行时】，或直接 phone_shell 跑 id。\n"
+            + "4) 先测再断言：说「不可用 / 不支持 / 没权限」之前，用最小命令实测一次（如 id、pm list packages | head -1）；"
+            + "没测就写「未验证」，不要写「应该可用 / 大概不行」。\n"
+            + "5) 批量：互不依赖的只读检查合并——phone_sh 一条命令用 ; / && 串联多条，或同一轮同时发多个工具调用。\n"
+            + "6) 其他：屏幕类走无障碍；文件/设置/剪贴板/通知/zip/docx 先 tool_search；网络用 phone_sh + curl；"
+            + "脚本用 phone_py / phone_js（无 pip/npm）。\n"
+            + "7) 工具缺失：只说明缺哪个后端、怎么开启，不要反复换关键词试探同一能力。";
+
+    /**
+     * 放在 system prompt 最末尾的自检清单。
+     * 模型对末尾指令更敏感，所以把最容易错的四条（身份 / 证据 / 负证据 / 体验）放最后。
+     */
+    private static final String SELF_CHECK =
+            "【回答前自检（逐条过，再输出）】\n"
+            + "1) 身份：这条结论来自哪个工具？phone_sh/phone_py/phone_js 是应用身份，phone_shell 是 Shizuku；有没有说混？\n"
+            + "2) 证据：每个「可用/不可用」都实测过吗？没测的写「未验证」，不要用「应该」「大概」。\n"
+            + "3) 负证据：有没有拿 ps -A、/proc/net、ss、端口探测这类在应用身份下看不到全局的指标当证明？有就撤掉。\n"
+            + "4) 体验：用户能不能直接看懂结论和下一步？缺能力时有没有给出开启路径（设置 → 手机能力）？";
     private final Map<String, McpClient> clientByServer = new HashMap<>();
     /** 需要用户确认的 MCP 工具（按函数名） */
     private final Set<String> riskyTools = new HashSet<>();
@@ -200,6 +230,17 @@ public final class AgentRunner {
 
     private volatile boolean cancelled;
     private volatile HttpURLConnection activeConnection;
+
+    /**
+     * 批量执行的计数：连续多少轮都只发一个同名工具调用。
+     * 轮数是有限资源，模型如果一条命令一轮地跑，这里会在第 6/12/18… 轮提醒它合并。
+     */
+    private String lastSingleToolName = "";
+    private int sameToolRounds = 0;
+    private int lastBatchHintRound = 0;
+
+    /** 运行开始时实测一次的能力快照，拼进 system prompt（每轮复用，保持 prompt 稳定） */
+    private String runtimeText = "";
 
     public AgentRunner(Context context, JSONObject payload, Emitter emitter) {
         this.context = context.getApplicationContext();
@@ -287,6 +328,8 @@ public final class AgentRunner {
 
     public void run() {
         try {
+            // 先把「这台机器现在到底有什么能力」实测一次，模型不必再用 ps/端口去猜
+            runtimeText = runtimeBlock();
             JSONArray tools = connectTools();
             JSONArray messages = buildMessages();
             int maxRounds = Math.min(Math.max(payload.optInt("maxRounds", 120), 1), MAX_ROUNDS);
@@ -301,6 +344,7 @@ public final class AgentRunner {
                     emitDone(result.stopReason);
                     return;
                 }
+                trackBatch(result.toolCalls);
                 messages.put(assistantMessage(result));
                 if (canRunParallel(result.toolCalls)) {
                     executeParallelRound(round + 1, result, messages);
@@ -397,6 +441,13 @@ public final class AgentRunner {
                     }
                     if (repeatedWarning && !isError) {
                         text = text + "\n\n（提示：相同调用已重复 3 次，可能卡住了，请检查上一步结果或换方法。）";
+                    }
+                    if (sameToolRounds >= 6 && (round + 1) - lastBatchHintRound >= 6) {
+                        lastBatchHintRound = round + 1;
+                        text = text + "\n\n（提示：已连续 " + sameToolRounds + " 轮只调用 " + call.name
+                                + "。互不依赖的命令请合并进一次调用"
+                                + "（phone_sh 的 command 支持用 ; 或 && 串联多条），"
+                                + "或在同一轮里同时发出多个工具调用，避免把轮数耗在来回往返上。）";
                     }
                     JSONObject event = new JSONObject();
                     event.put("type", "tool_result");
@@ -496,6 +547,22 @@ public final class AgentRunner {
             origin = origin.substring(0, origin.length() - 1);
         }
         return origin + "/anthropic/v1";
+    }
+
+    /** 统计「连续单工具轮」，给批次提示用；同一轮发了多个工具就清零 */
+    private void trackBatch(List<ToolCall> calls) {
+        if (calls.size() == 1) {
+            String name = calls.get(0).name;
+            if (name.equals(lastSingleToolName)) {
+                sameToolRounds++;
+            } else {
+                lastSingleToolName = name;
+                sameToolRounds = 1;
+            }
+        } else {
+            lastSingleToolName = "";
+            sameToolRounds = 0;
+        }
     }
 
     private boolean canRunParallel(List<ToolCall> calls) {
@@ -994,6 +1061,35 @@ public final class AgentRunner {
         return builder.length() == 0 ? "tool" : builder.toString();
     }
 
+    /** 运行开始时实测一次：给模型权威的能力状态，省得它用 ps / 端口去猜 */
+    private String runtimeBlock() {
+        boolean accessibility = false;
+        try {
+            accessibility = AccessibilityStatus.isEnabled(context);
+        } catch (Throwable ignored) {
+            // 读不到就按未开启处理
+        }
+        boolean shizuku = false;
+        try {
+            shizuku = ShizukuShell.running() && ShizukuShell.granted();
+        } catch (Throwable ignored) {
+            // 没有 Shizuku 或版本不支持
+        }
+        StringBuilder text = new StringBuilder("【本机运行时（每次运行开始时实测，可直接采信）】\n");
+        text.append("- 无障碍服务：")
+                .append(accessibility
+                        ? "已开启（屏幕 / 点按类工具可用）"
+                        : "未开启（屏幕 / 点按类工具不可用，需要用户去 系统设置 → 无障碍 开启 DLA）")
+                .append('\n');
+        text.append("- Shizuku：")
+                .append(shizuku
+                        ? "已就绪（phone_shell 可用，uid 2000）"
+                        : "未就绪（phone_shell 不在工具列表；pm / am / settings / dumpsys 不可用）")
+                .append('\n');
+        text.append("- 内置运行时：phone_sh / phone_py / phone_js 都是应用身份（无特权）");
+        return text.toString();
+    }
+
     /** 长任务状态注入 system：计划与关键笔记不会被上下文裁剪掉 */
     private String buildSystem() {
         String base = payload.optString("system", "");
@@ -1004,6 +1100,9 @@ public final class AgentRunner {
         }
         StringBuilder builder = new StringBuilder(base);
         builder.append("\n\n").append(TOOL_MAP);
+        if (!runtimeText.isEmpty()) {
+            builder.append("\n\n").append(runtimeText);
+        }
         if (plan.length() > 0) {
             builder.append("\n\n【当前任务计划】\n");
             for (int i = 0; i < plan.length(); i++) {
@@ -1024,6 +1123,8 @@ public final class AgentRunner {
                 builder.append("- ").append(notes.optString(i)).append('\n');
             }
         }
+        // 放最后：模型对末尾指令更敏感
+        builder.append("\n\n").append(SELF_CHECK);
         return builder.toString();
     }
 

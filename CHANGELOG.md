@@ -1,5 +1,48 @@
 # Changelog
 
+## 3.1.2
+
+- **The agent's tool guide is now organised around execution identity.** Three
+  identities are spelled out: `phone_sh` / `phone_py` / `phone_js` run as the app
+  uid (no `pm` / `am` / `settings` / `dumpsys`, no global `/proc`), `phone_shell`
+  runs as Shizuku (uid 2000, the only place privileged commands work), and the
+  accessibility tools only drive the UI. The guide also states that a success in
+  one identity does not prove the other, and that a failure in one does not mean
+  the phone cannot do it.
+- **Negative evidence is banned.** Under the app uid, `ps -A` only sees the app's
+  own processes and `/proc/net/tcp`, `ss`, `/data/app` are unreadable, so “I did
+  not see it” is not “it is not running”.
+- **Test before you claim.** Saying “unavailable / unsupported / permission
+  denied” now requires a minimal real attempt; untested items must be labelled
+  “unverified” instead of “should work”.
+- **Runtime capabilities are injected into the system prompt** at the start of
+  every run (accessibility on/off, Shizuku ready or not, bundled runtime
+  identity), so the model no longer probes for them with `ps` or port scans.
+  A final self-check block closes the system prompt.
+- **Context-usage bar and per-turn timer in the Agent area.** Ten dashed
+  segments, one per 10%, filled proportionally (minimum 1%, 0.1% precision); the
+  window is selectable (64K / 128K / 256K / 1M, default 128K). The timer measures
+  one turn from send to finish and is persisted per session.
+- **Home screen split into two isolated zones.** The home screen only has the
+  LLM and Agent entries; each conversation list lives inside its own zone.
+  Agent uses the mint accent, LLM uses the warm accent.
+- **Tool cards show the execution identity** (`App identity` / `Shizuku uid
+  2000`) next to the parameters.
+- **Fixed:** the tool-detail panel was always empty because the UI read `text`
+  / `is_error` while the runner emits `content` / `isError`; session rows never
+  showed rounds/steps because `usageStats` was never written.
+- **Rounds:** the per-run ceiling is now 120 model round-trips (was 40), and the
+  guide teaches batching (`;` / `&&` inside one `phone_sh` call, several tool
+  calls in one turn). After 6 consecutive single-tool rounds the runner appends a
+  batching hint.
+
+## 3.1
+
+- Raised the per-run ceiling from 40 to 120 rounds and added the batching hints.
+- Added the context-usage bar and per-turn timer to the Agent area.
+- Split the home screen into LLM / Agent zones and recoloured the two areas.
+- Fixed the blank tool-detail panel and the missing rounds/steps in session rows.
+
 ## 3.0
 
 - **Settings, rebuilt for scanning.** Every block is now a titled card with an accent bar

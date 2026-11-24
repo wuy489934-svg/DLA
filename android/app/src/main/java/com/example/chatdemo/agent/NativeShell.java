@@ -42,13 +42,14 @@ public final class NativeShell {
         return new JSONObject()
                 .put("name", NAME)
                 .put("description",
-                        "在本机执行一条 shell 命令（应用自己的身份，不需要 Termux、不需要 Shizuku）。"
-                                + "返回退出码、stdout、stderr 和耗时。"
-                                + "可用的是 Android 自带 toybox：sh/awk/sed/grep/find/xargs/tar/gzip/unzip/"
-                                + "sha256sum/stat/du/df/nc/timeout 等，PATH 里另有 node 和 rg。"
-                                + "注意：这是 app 身份，pm/am/settings/dumpsys/input 这类特权命令会 permission denied，"
-                                + "需要特权时改用 phone_shell（Shizuku）。"
-                                + "一次只跑一条命令，不要起交互式进程；需要脚本能力时用 phone_py / phone_js。")
+                        "在手机上以「应用身份」执行 shell 命令（不需要 Termux / Shizuku）。返回退出码、stdout、stderr。"
+                                + "能：读自身目录与 /sdcard、grep/find/awk/sed、getprop、curl、node、rg。"
+                                + "不能：pm / am / settings / dumpsys（SELinux 拒绝，典型报错 "
+                                + "\"Failure calling service ...\" 或 \"Permission Denial\"），"
+                                + "也看不到 /proc 全局、/data/app、别家应用私有目录。这些不是命令写错：需要就换 phone_shell（Shizuku，uid 2000）。"
+                                + "不要用 ps -A 或端口探测判断别的进程/服务是否存在（这里只能看到自己）。"
+                                + "command 可以包含多条语句（用 ; 或 && 连接）：互不依赖的只读检查请合并成一次调用；"
+                                + "不要起交互式进程（top/vim），需要脚本能力时用 phone_py / phone_js。")
                 .put("input_schema", new JSONObject()
                         .put("type", "object")
                         .put("properties", properties)

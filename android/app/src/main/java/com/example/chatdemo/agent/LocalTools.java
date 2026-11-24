@@ -144,7 +144,8 @@ public final class LocalTools {
         JSONArray list = new JSONArray();
         list.put(tool(
                 "phone_shell",
-                "在手机上以 shell(uid 2000) 执行命令，返回 stdout+stderr。可以用来做任何 am/pm/input/settings 操作。",
+                "以系统 shell 身份（uid 2000，Shizuku）执行命令，返回 stdout+stderr。"
+                        + "pm / am / settings / dumpsys / 全系统 ps 只有这里能跑；应用身份（phone_sh）做不了这些，别把两边混为一谈。",
                 schema(props("command", p("string", "要执行的 shell 命令"), "timeout_ms", p("number", "超时毫秒，默认 20000")), "command")
         ));
         list.put(tool(
@@ -196,7 +197,9 @@ public final class LocalTools {
         ));
         list.put(tool(
                 "phone_apps",
-                "列出已安装应用包名。third_party 默认 true，只看用户安装的应用。",
+                "列出已安装应用（应用名 | 包名），走 PackageManager 接口，应用身份即可，不需要 Shizuku。"
+                        + "third_party 默认 true，只看用户安装的应用。不含 versionCode / APK 路径 / 安装来源 / 签名——"
+                        + "那些要用 phone_shell 的 pm 或 dumpsys。",
                 schema(props("third_party", p("boolean", "是否只看第三方应用，默认 true")))
         ));
         list.put(tool(
