@@ -43,6 +43,7 @@
 - [两个区共用的东西](#shared)
 - [版本沿革](#history)
 - [完全、公开、透明的开源](#oss)
+- [这个工程是怎么用 DSH 做出来的](#dsh)
 - [架构、目录与构建](#build)
 - [搜索关键词](#keywords)
 - [English summary](#english)
@@ -496,6 +497,23 @@ DLA 会根据本轮思考长度自适应：超过预算就中止这一轮、关�
 - **不藏失败**：已知限制、未验证能力、免费搜索后端的反爬风险、TTS 的区域限制，都写在文档与 FAQ 里，不用“应该可以”糊过去。
 - **关注点分离**：`docs/ARCHITECTURE.md`（架构）、`docs/AGENT-RUNTIME.md`（运行时与事件协议）、`SECURITY.md`（威胁模型）。
 
+<a id="dsh"></a>
+
+## 这个工程是怎么用 DSH 做出来的
+
+DLA 的开发全程在 **DeepSeek Harness（DSH）** 里进行。DSH 是命令行式的 AI 编程代理：给它一个任务，它自己读代码、改文件、跑构建、连手机验证，再把结果交回来。这个仓库从 1.3 到 3.6.0 的改动，都是这样一轮一轮跑出来的。
+
+| 环节 | DSH 的工具 / 场景 | 大致占比 |
+|---|---|---|
+| 读代码、定位问题 | 读文件、grep/glob 检索 | ≈95% |
+| 改代码 | 写文件 / 精确替换（Kotlin、Java、Gradle、Python 脚本） | ≈95% 的代码行 |
+| 构建与签名 | shell 跑 Gradle、切换 release keystore、aapt2/apksigner 校验 | ≈100% |
+| 真机验证 | adb 安装、logcat、uiautomator、截图比对 | ≈90% |
+| 素材生成 | 用无头浏览器渲染产物帧、合成 GIF/PNG 并核对 | ≈100% |
+| 文档与发布 | README/CHANGELOG/Release notes、git commit/tag/push、gh release | ≈90% |
+
+剩下的 5–10% 是作者亲手做的：定需求、拍板取舍、看真机效果、决定发不发。作者的定位是**产品负责人和验收人**：不逐行写代码，但对每一行上线代码负责。
+
 <a id="build"></a>
 
 ## 架构、目录与构建
@@ -524,6 +542,14 @@ cd android
 ```
 
 版本号由 `-PdlaVersionCode=` / `-PdlaVersionName=` 控制（本仓库默认 **52 / 3.6.0**，CI 不带参数，默认值即发布值）。构建细节、CI 与发布流程见 [`BUILD.md`](BUILD.md) 与 [`RELEASING.md`](RELEASING.md)。
+
+### 许可与素材
+
+- 本项目原创代码：**Apache License 2.0**（见 [`LICENSE`](LICENSE)）。
+- **图标与吉祥物为本项目原创**：应用图标为 v1「Cue」，首页与思考态使用 v1 / v2 吉祥物动效（见 [`docs/mascot/`](docs/mascot/README.md)），与本仓库同许可；`docs/assets/` 内的图标与演示图可直接用于介绍 DLA。
+- 内置运行时：Node.js（MIT）、ripgrep（MIT / Unlicense）、CPython（PSF）、Chaquopy（MIT）、Android toybox（0BSD）；Node / ripgrep 的 arm64 二进制来自 DSH-Android 的预编译发布（Apache-2.0）。
+- KaTeX 与 mermaid 按 MIT 许可随 APK 内置；第三方组件许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`NOTICE`](NOTICE)。
+- 不捆绑、不分发官方 Demo 的角色素材或未授权插画；`chat-demo:*` 存储键仅为兼容旧数据，不代表产品身份。
 
 ### 关键约束（都可核对代码）
 
