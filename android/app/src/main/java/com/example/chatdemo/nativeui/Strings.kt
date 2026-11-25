@@ -287,6 +287,9 @@ object Lang {
         "中文" to "Chinese",
         "对话" to "Conversation",
         "深度思考（LLM 区）" to "Deep thinking (LLM chat)",
+        "深度思考（LLM / Agent 区）" to "Deep thinking (LLM / Agent)",
+        "（旧版本解析异常留下的空回答，已隐藏）" to "(empty answer left by an older parsing bug, hidden)",
+        "（这条回答是旧版本解析错误留下的，已隐藏；可以删除本会话重试）" to "(this answer was left by an older parsing bug and is hidden; delete this session and retry)",
         "联网搜索（LLM 区）" to "Web search (LLM chat)",
         "完全权限（Agent 不再逐次确认）" to "Full access (no per-step approval)",
         "界面音效" to "UI sounds",
@@ -379,6 +382,7 @@ object Lang {
 
         // ---- 迭代树 ----
         "迭代树" to "Iteration tree",
+        "执行过程" to "Process",
         "收起迭代树" to "Collapse iteration tree",
         "展开迭代树" to "Expand iteration tree",
         "暂无迭代记录" to "No iterations yet",
@@ -510,5 +514,14 @@ object Lang {
         "与用户的关系" to "Relationship with the user",
         "来历 / 背景" to "Background",
         "边界与底线（必须遵守）" to "Boundaries (must follow)",
+        "已保存，下一次请求生效" to "Saved; it takes effect on the next request",
+        "已保存，但还没填 API Key，暂时不能对话" to "Saved, but there is no API key yet, so chatting will fail",
+        "已刷新" to "Refreshed",
+        "刷新" to "Refresh",
+        "第 %d 轮" to "Round %d",
+        "缓存 %s" to "Cache %s",
+        "编辑" to "Edit",
+        "修改这条消息" to "Edit this message",
+        "保存并重新生成" to "Save and regenerate",
     )
 }

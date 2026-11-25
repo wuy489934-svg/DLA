@@ -103,11 +103,35 @@ Tool availability trimming (`connectTools`):
    teaches `phone_write` + `phone_append` in ≤3000-character chunks. The round continues.
 7. **Output budget overflow continues.** If a round ends on `max_tokens` with no tool
    call, the partial text is appended as an assistant message plus a “continue” nudge,
-   up to 3 times, with a status event each time.
+   up to 3 times, with a status event each time. If the output budget was consumed by
+   thinking with no text at all, the watchdog downgrades **that round only**, then the
+   next round thinks again (see “Thinking budget” below).
 8. Events flow back through `AgentService` → `AgentClient` → `ChatEngine` state; the same
    events are folded into `AgentRunJournal`, which is flushed at most once per 700 ms.
 9. On `done` / `stopped` / `error` the journal is finalised and broadcast, the checkpoint
    is cleared, a result notification is posted and the service stops.
+
+## Thinking budget and tool rounds
+
+DLA keeps the `thinking → tool → thinking` loop alive for long tasks instead of disabling
+thinking for the rest of the run:
+
+- A per-round character budget (12 000) plus a client-side watchdog aborts a round only
+  when it has produced thinking but no text and no tool call. Repeated overruns tighten
+  the next attempts (12K → 6K → 3K characters); a successful round resets it.
+- The retry runs with thinking disabled **for that round only**; before it, the tail of
+  the abandoned reasoning (≤600 characters) is appended to the nudge so the model can
+  continue instead of re-deriving its plan. The retry reuses the same round number.
+- **Thinking blocks are part of the protocol.** Anthropic Messages (including DeepSeek’s
+  `/anthropic/v1`) rejects the next tool round if an assistant message produced under
+  thinking lacks its `thinking` block and signature:
+  `The content[].thinking in the thinking mode must be passed back to the API`.
+  The SSE handler accumulates `thinking` and `signature_delta`; `assistantMessage()`
+  prepends `{"type":"thinking","thinking":…,"signature":…}`; a watchdog-truncated round
+  re-attaches the abandoned thinking so the recovered assistant message is still valid.
+  The block is only sent on the Anthropic dialect.
+- Claude gets a server-side budget (`thinking.budget_tokens=4096`); DeepSeek and other
+  Anthropic-compatible endpoints rely on the client watchdog.
 
 ## Web tools
 
@@ -162,7 +186,8 @@ LLM and Agent are two peer zones, not a chat box with an add-on:
 - sessions carry a `mode` (`llm` / `agent`); the home screen only routes, and each
   zone lists only its own sessions;
 - both share the same model endpoint, API key, protocol, provider and local store;
-- the Agent zone adds the tool loop, iteration tree, approvals and the
+- the Agent zone adds the tool loop, iteration tree, one collapsible Process card for all
+  rounds (expanded while running, collapsed once stored), approvals and the
   context-usage / turn-time bar; the LLM zone adds persona, speech and web search.
 
 ## Crash behavior

@@ -46,6 +46,8 @@ public final class AgentRunJournal {
     private final long startedAt;
     private final StringBuilder text = new StringBuilder();
     private final StringBuilder thinking = new StringBuilder();
+    /** 按轮拆开的思考：界面恢复时能还原成多张思考卡 */
+    private final Map<Integer, StringBuilder> thinkingRounds = new LinkedHashMap<>();
     private final Map<String, JSONObject> tools = new LinkedHashMap<>();
     private JSONObject usage;
     private JSONObject taskState;
@@ -149,9 +151,18 @@ public final class AgentRunJournal {
                 case "text":
                     text.append(deltaOf(event));
                     break;
-                case "thinking":
-                    thinking.append(deltaOf(event));
+                case "thinking": {
+                    String delta = deltaOf(event);
+                    thinking.append(delta);
+                    int round = event.optInt("round", 0);
+                    StringBuilder buffer = thinkingRounds.get(round);
+                    if (buffer == null) {
+                        buffer = new StringBuilder();
+                        thinkingRounds.put(round, buffer);
+                    }
+                    buffer.append(delta);
                     break;
+                }
                 case "tool_start": {
                     String id = event.optString("id");
                     if (!id.isEmpty()) {
@@ -275,6 +286,13 @@ public final class AgentRunJournal {
             json.put("updatedAt", System.currentTimeMillis());
             json.put("text", text.toString());
             json.put("thinking", thinking.toString());
+            JSONArray thinkingArray = new JSONArray();
+            for (Map.Entry<Integer, StringBuilder> entry : thinkingRounds.entrySet()) {
+                thinkingArray.put(new JSONObject()
+                        .put("round", entry.getKey())
+                        .put("text", entry.getValue().toString()));
+            }
+            json.put("thinkingRounds", thinkingArray);
             json.put("error", error == null ? "" : error);
             JSONArray array = new JSONArray();
             for (JSONObject tool : tools.values()) {

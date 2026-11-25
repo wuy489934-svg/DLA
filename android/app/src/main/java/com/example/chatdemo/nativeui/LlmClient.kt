@@ -40,6 +40,16 @@ object LlmClient {
     interface Sink {
         fun onText(delta: String) {}
         fun onThinking(delta: String) {}
+        /** 联网工具/服务端状态提示（搜索中、读到几条结果等） */
+        fun onStatus(text: String) {}
+        /** token 用量（缓存命中率要用）；接口不返回时不会调用 */
+        fun onUsage(
+            inputTokens: Int,
+            cacheReadTokens: Int,
+            cacheCreationTokens: Int,
+            outputTokens: Int,
+        ) {
+        }
         fun onDone(stopReason: String?) {}
         fun onError(message: String) {}
     }
@@ -222,9 +232,9 @@ object LlmClient {
                 (connection.errorStream ?: connection.inputStream)?.bufferedReader()?.readText().orEmpty()
             }.getOrDefault("")
             val message = runCatching {
-                JSONObject(text).optJSONObject("error")?.optString("message").orEmpty()
+                JSONObject(text).optJSONObject("error")?.str("message").orEmpty()
             }.getOrDefault("")
-            sink.onError(if (message.isNotEmpty()) message else "HTTP $code")
+            sink.onError((if (message.isNotEmpty()) message else "HTTP $code") + HTTP_HINT)
             return
         }
 
@@ -234,6 +244,7 @@ object LlmClient {
             return
         }
 
+        val saw = BooleanArray(1)
         BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
             var event = ""
             val data = StringBuilder()
@@ -248,14 +259,21 @@ object LlmClient {
                     }
                     line.isEmpty() -> {
                         if (data.isNotEmpty()) {
-                            val finished = handleEvent(event, data.toString(), sink)
-                            if (finished) return
+                            val finished = handleEvent(event, data.toString(), sink, saw)
+                            if (finished) {
+                                if (!saw[0]) sink.onError(EMPTY_REPLY_HINT) else sink.onDone(null)
+                                return
+                            }
                         }
                         event = ""
                         data.setLength(0)
                     }
                 }
             }
+        }
+        if (!saw[0]) {
+            sink.onError(EMPTY_REPLY_HINT)
+            return
         }
         sink.onDone(null)
     }
@@ -319,12 +337,13 @@ object LlmClient {
                 (connection.errorStream ?: connection.inputStream)?.bufferedReader()?.readText().orEmpty()
             }.getOrDefault("")
             val message = runCatching {
-                JSONObject(text).optJSONObject("error")?.optString("message").orEmpty()
+                JSONObject(text).optJSONObject("error")?.str("message").orEmpty()
             }.getOrDefault("")
-            sink.onError(if (message.isNotEmpty()) message else "HTTP $code")
+            sink.onError((if (message.isNotEmpty()) message else "HTTP $code") + HTTP_HINT)
             return
         }
 
+        var sawAny = false
         BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
             while (true) {
                 if (handle.isCancelled()) return
@@ -335,43 +354,114 @@ object LlmClient {
                 if (data.isEmpty()) continue
                 if (data == "[DONE]") break
                 val chunk = runCatching { JSONObject(data) }.getOrNull() ?: continue
+                val usage = chunk.optJSONObject("usage")
+                if (usage != null) {
+                    val prompt = usage.optInt("prompt_tokens", 0)
+                    var cached = usage.optJSONObject("prompt_tokens_details")
+                        ?.optInt("cached_tokens", 0) ?: 0
+                    if (cached == 0) cached = usage.optInt("prompt_cache_hit_tokens", 0)
+                    sink.onUsage(
+                        inputTokens = (prompt - cached).coerceAtLeast(0),
+                        cacheReadTokens = cached,
+                        cacheCreationTokens = 0,
+                        outputTokens = usage.optInt("completion_tokens", 0),
+                    )
+                }
                 val choices = chunk.optJSONArray("choices") ?: continue
                 if (choices.length() == 0) continue
                 val delta = choices.optJSONObject(0)?.optJSONObject("delta") ?: continue
-                val text = delta.optString("content")
-                if (text.isNotEmpty()) sink.onText(text)
-                val thinking = delta.optString("reasoning_content").ifEmpty { delta.optString("reasoning") }
-                if (thinking.isNotEmpty()) sink.onThinking(thinking)
+                val text = delta.str("content")
+                if (text.isNotEmpty()) { sawAny = true; sink.onText(text) }
+                val thinking = delta.str("reasoning_content").ifEmpty { delta.str("reasoning") }
+                if (thinking.isNotEmpty()) { sawAny = true; sink.onThinking(thinking) }
             }
+        }
+        if (!sawAny) {
+            sink.onError(EMPTY_REPLY_HINT)
+            return
         }
         sink.onDone(null)
     }
 
-    private fun handleEvent(event: String, data: String, sink: Sink): Boolean {
+    private fun handleEvent(event: String, data: String, sink: Sink, saw: BooleanArray): Boolean {
         val json = runCatching { JSONObject(data) }.getOrNull() ?: return false
         when (event.ifEmpty { json.optString("type") }) {
+            "content_block_start" -> {
+                // 服务端工具（DeepSeek 的 deepseek_web_search / deepseek_read_url）整块下发，
+                // 不解析就只能看到模型「凭空」回答，用户会以为联网没生效。
+                val block = json.optJSONObject("content_block") ?: return false
+                when (block.optString("type")) {
+                    "server_tool_use" -> {
+                        val name = block.str("name")
+                        val input = block.optJSONObject("input")
+                        val queries = input?.optJSONArray("queries")
+                        val url = input?.str("url").orEmpty()
+                        val detail = when {
+                            queries != null && queries.length() > 0 ->
+                                (0 until queries.length()).joinToString("、") { queries.optString(it) }
+                            url.isNotEmpty() -> url
+                            else -> input?.str("action").orEmpty()
+                        }
+                        sink.onStatus(
+                            if (name.contains("web_search")) "联网搜索 · $detail"
+                            else "阅读链接 · $detail",
+                        )
+                    }
+                    "web_search_tool_result" -> {
+                        val count = block.optJSONArray("content")?.length() ?: 0
+                        sink.onStatus("搜索完成 · $count 条结果")
+                    }
+                    "web_fetch_tool_result" -> sink.onStatus("网页已读取")
+                }
+            }
             "content_block_delta" -> {
                 val delta = json.optJSONObject("delta") ?: return false
                 when (delta.optString("type")) {
-                    "text_delta" -> sink.onText(delta.optString("text"))
-                    "thinking_delta" -> sink.onThinking(delta.optString("thinking"))
+                    "text_delta" -> { val piece = delta.str("text"); if (piece.isNotEmpty()) { saw[0] = true; sink.onText(piece) } }
+                    "thinking_delta" -> { val piece = delta.str("thinking"); if (piece.isNotEmpty()) { saw[0] = true; sink.onThinking(piece) } }
                 }
             }
             "message_stop" -> {
-                sink.onDone(null)
+                // 不在这里直接 onDone：交给调用方判断「有没有收到过内容」
                 return true
             }
-            "message_delta" -> Unit // 只带 stop_reason/usage，不是结束信号
+            "message_start" -> {
+                val usage = json.optJSONObject("message")?.optJSONObject("usage")
+                if (usage != null) {
+                    sink.onUsage(
+                        inputTokens = usage.optInt("input_tokens", 0),
+                        cacheReadTokens = usage.optInt("cache_read_input_tokens", 0),
+                        cacheCreationTokens = usage.optInt("cache_creation_input_tokens", 0),
+                        outputTokens = 0,
+                    )
+                }
+            }
+            "message_delta" -> {
+                // 只带 stop_reason / usage，不是结束信号
+                val usage = json.optJSONObject("usage")
+                if (usage != null) {
+                    sink.onUsage(0, 0, 0, usage.optInt("output_tokens", 0))
+                }
+            }
             "error" -> {
-                val message = json.optJSONObject("error")?.optString("message") ?: data
+                val message = json.optJSONObject("error")?.str("message").orEmpty().ifEmpty { data }
                 sink.onError(message)
             }
         }
         return false
     }
 
+    /** 接口通了但一个字节内容都没回：基本是 Key / Base URL / 协议不匹配 */
+    private const val EMPTY_REPLY_HINT =
+        "接口返回了空内容。请检查：①接口协议（Anthropic / OpenAI）；②Base URL 与供应商是否对应；③API Key 是否属于同一家服务商。"
+
+    private const val HTTP_HINT = "（请检查协议、Base URL 与 API Key 是否属于同一家服务商）"
+
     const val DEFAULT_SYSTEM = "该助手为DeepSeek，由深度求索公司创造。"
 
     /** OpenAI 协议下用中性身份，避免对着 GPT/Qwen 说自己是 DeepSeek */
     private const val NEUTRAL_SYSTEM = "你是一个乐于助人的 AI 助手。"
 }
+
+/** org.json 的 optString 对 JSON null 会返回字符串 "null"，直接拼接就是满屏 null */
+private fun JSONObject.str(key: String): String = (opt(key) as? String).orEmpty()

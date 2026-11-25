@@ -61,8 +61,8 @@ public final class ProviderCompat {
                 "https://api.deepseek.com/v1", "deepseek-chat",
                 "OpenAI 方言下没有联网搜索 / 深度思考服务端工具");
         put(out, QWEN, "通义千问 / 百炼", "openai",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",
-                "兼容模式走 /chat/completions；思考开关是 enable_thinking");
+                "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", "qwen-plus",
+                "token-plan 专属地址；标准百炼控制台用 https://dashscope.aliyuncs.com/compatible-mode/v1；思考开关是 enable_thinking");
         put(out, MOONSHOT, "月之暗面 Kimi", "openai",
                 "https://api.moonshot.cn/v1", "kimi-k2-0905-preview",
                 "长上下文；工具调用与 OpenAI 一致");

@@ -54,6 +54,30 @@ public final class AgentRunner {
     private static final int MAX_AUTO_CONTINUES = 3;
 
     /**
+     * 单轮思考字符预算：超过这个数、且还没产生任何正文/工具调用，就中止本轮、关思考重试。
+     *
+     * 现场：长任务里模型能连续想几分钟，把 max_tokens（输出预算）整个烧在思考上，
+     * 于是「思考到头、计划还没开始」。DSH 的做法是给思考设预算（budget_tokens / effort），
+     * 这里再加一道客户端看门狗，保证任何供应商都能继续往下走。
+     *
+     * 3.6.0 起它是「这一轮」的预算，不是整轮运行的开关：被截断只让本轮直接执行，
+     * 下一轮照常允许思考，避免长任务后半程变成「无脑执行」。
+     */
+    private static final int THINKING_CHAR_LIMIT = 12_000;
+
+    /** 连续想过头时逐步收紧预算，但不低于这个值：思考不能名存实亡 */
+    private static final int THINKING_CHAR_FLOOR = 3_000;
+
+    /** 看门狗最多出手几次：之后不再主动打断，交给 max_tokens / 自动续写兜底 */
+    private static final int MAX_THINKING_CUTS = 10;
+
+    /** 截断后回传的思考摘要长度：接上已经想到的要点，避免从零重想 */
+    private static final int THINKING_CARRY_CHARS = 600;
+
+    /** 历史超过这个字符数才裁剪：每轮都裁剪会把缓存前缀打碎，缓存命中率会掉 */
+    private static final int TRIM_THRESHOLD_CHARS = 240_000;
+
+    /**
      * 工具参数在 max_tokens 处被截断时的可恢复错误。
      *
      * 以前这种调用会在 assistantMessage() 里 new JSONObject(...) 抛异常，
@@ -66,6 +90,15 @@ public final class AgentRunner {
                     + "请拆小重试：先用 phone_write 写入第一段（建议每段不超过 3000 字符），"
                     + "再用 phone_append 逐段追加到同一个文件；也可以改用 phone_py / phone_sh 生成文件。\n"
                     + "不要原样重发整段内容，也不要改成一个巨大的参数。";
+
+    /** 接口通了但什么都没返回：九成是 Key / Base URL / 协议三者不匹配（例如百炼 Key 配 DeepSeek 地址）。 */
+    private static final String EMPTY_REPLY_HINT =
+            "接口返回了空内容。请检查三处是否匹配：①接口协议（Anthropic / OpenAI）；"
+                    + "②Base URL 与所选供应商是否对应；③API Key 是否属于同一家服务商。";
+
+    /** HTTP 报错时的补充提示：这类错误几乎都是「Key / 地址 / 协议不匹配」而不是网络问题。 */
+    private static final String HTTP_HINT =
+            "\n（请检查：接口协议、Base URL 与 API Key 是否属于同一家服务商）";
 
     private static final ExecutorService TOOL_POOL = Executors.newFixedThreadPool(
             TOOL_PARALLELISM,
@@ -109,9 +142,34 @@ public final class AgentRunner {
         int outputTokens;
         int cacheCreationInputTokens;
         int cacheReadInputTokens;
+        /** 这一轮有没有收到过思考增量（用来判断「空响应」） */
+        boolean sawThinking;
+        /** 这一轮思考累计字符数（看门狗用） */
+        int thinkingChars;
+        /** 这一轮的思考原文：被截断时把尾巴带进提示，避免下一轮从零重想 */
+        final StringBuilder thinking = new StringBuilder();
+        /**
+         * 思考块签名（Anthropic 协议）。
+         *
+         * DeepSeek / Claude 在开思考 + 工具调用时要求把上一轮的 thinking 块**原样回传**，
+         * 否则下一轮直接 400（The content[].thinking ... must be passed back）。
+         */
+        final StringBuilder thinkingSignature = new StringBuilder();
     }
 
     private static final class CancelledException extends Exception {}
+
+    /**
+     * 思考太长、本轮被看门狗中止：不算失败，只让**这一轮**关思考重试，下一轮恢复思考。
+     * 异常里带着已经产生的思考，重试提示会接上它的尾巴，不浪费已经想出来的东西。
+     */
+    private static final class ThinkingCutException extends Exception {
+        final String partialThinking;
+
+        ThinkingCutException(String partialThinking) {
+            this.partialThinking = partialThinking == null ? "" : partialThinking;
+        }
+    }
 
     private static final class ToolOutcome {
         final String text;
@@ -281,14 +339,49 @@ public final class AgentRunner {
     /** 运行开始时实测一次的能力快照，拼进 system prompt（每轮复用，保持 prompt 稳定） */
     private String runtimeText = "";
 
+    /** 当前迭代轮次（1 起）：思考增量要带上它，界面才能按轮分卡 */
+    private volatile int currentRound = 0;
+
+    /** 深度思考：界面开关 → 请求参数（Anthropic 的 thinking / OpenAI 方言的 enable_thinking 等） */
+    private final boolean thinking;
+
     /** 输出被 max_tokens 截断后自动续写的次数（长思考/长文不该把任务停掉） */
     private int autoContinues = 0;
+
+    /** 思考被截断的次数（整轮运行累计，只用于看门狗保底） */
+    private int thinkingCuts = 0;
+
+    /**
+     * 连续被截断的轮数：连续发生说明这个模型在这类任务上容易想过头。
+     * 只收紧**下一轮**的思考预算（12K → 6K → 3K），成功执行一轮就恢复，
+     * 而不是像以前那样把整个 run 的思考永久关掉。
+     */
+    private int thinkingCutStreak = 0;
+
+    /** 本轮实际生效的思考字符预算 */
+    private int thinkingCharLimit = THINKING_CHAR_LIMIT;
+
+    /** 本轮是否临时关掉思考：只影响当前这一轮的这次重试，下一轮自动恢复 */
+    private boolean suppressThinking = false;
+
+    /**
+     * 本轮被看门狗中止后留下的思考（重试时思考是关的，不会产生新的 thinking 块）。
+     *
+     * Anthropic 协议要求开思考时把 assistant 的 thinking 原样回传；如果这一轮的
+     * assistant 消息完全没有 thinking 块，下一轮请求会被服务端 400 拒绝
+     * （The content[].thinking in the thinking mode must be passed back）。
+     * 所以重试成功后，把被截断的思考补回这条 assistant 消息里。
+     */
+    private String recoveryThinking = "";
 
     public AgentRunner(Context context, JSONObject payload, Emitter emitter) {
         this.context = context.getApplicationContext();
         this.payload = payload;
         this.emitter = emitter;
         this.autoApprove = payload.optBoolean("autoApprove", false);
+        // 深度思考开关由界面传进来（设置页 / 对话页顶部）；Agent 以前无条件关掉，
+        // 导致「DeepSeek 协议 + 开思考」时永远没有思考卡。
+        this.thinking = payload.optBoolean("thinking", false);
         this.protocol = payload.optString("protocol", "anthropic").trim().toLowerCase();
         // 供应商由界面传（设置页选过预设就有），否则按 Base URL / 模型名自动识别。
         // 认错了最多少带一个可选字段，不会把请求写坏；认对则能避开各家兼容层的小坑。
@@ -391,23 +484,70 @@ public final class AgentRunner {
                 if (cancelled) {
                     throw new CancelledException();
                 }
+                currentRound = round + 1;
+                // 每一轮都从「允许思考」开始：上一轮被看门狗要求直接执行，不会连累这一轮。
+                // 连续想过头时只收紧本轮的预算，而不是把整个任务的思考关掉。
+                suppressThinking = false;
+                recoveryThinking = "";
+                thinkingCharLimit = thinkingBudgetForStreak();
                 appendDiscoveredTools(tools);
-                trimMessages(messages);
-                RoundResult result = streamRound(messages, tools);
+                maybeTrimMessages(messages);
+                RoundResult result;
+                boolean cutThisRound = false;
+                int recoveries = 0;
+                // 同一轮内的重试：思考超限时只让「这一轮」关思考再来一次，不消耗轮数
+                while (true) {
+                    try {
+                        result = streamRound(messages, tools);
+                    } catch (ThinkingCutException cut) {
+                        thinkingCuts++;
+                        thinkingCutStreak++;
+                        cutThisRound = true;
+                        if (suppressThinking || recoveries >= 1) {
+                            throw cut;
+                        }
+                        suppressThinking = true;
+                        recoveries++;
+                        recoveryThinking = cut.partialThinking;
+                        emitStatus("第 " + currentRound + " 轮思考过长，本轮改为直接执行（下一轮恢复思考）");
+                        messages.put(nudgeMessage(thinkingCutNudge(cut.partialThinking)));
+                        continue;
+                    }
+                    boolean noOutput = result.toolCalls.isEmpty() && result.text.length() == 0;
+                    if (noOutput && thinking && !suppressThinking && recoveries < 2) {
+                        // 思考把输出预算烧光（或想完就停）：本轮关思考重来，下一轮恢复；
+                        // 只重试这一轮，不把空的 assistant 消息塞进历史。
+                        thinkingCuts++;
+                        thinkingCutStreak++;
+                        cutThisRound = true;
+                        suppressThinking = true;
+                        recoveries++;
+                        recoveryThinking = result.thinking.toString();
+                        emitStatus("第 " + currentRound + " 轮思考用完了输出预算，本轮改为直接执行（下一轮恢复思考）");
+                        messages.put(nudgeMessage(thinkingCutNudge(result.thinking.toString())));
+                        continue;
+                    }
+                    break;
+                }
+                if (!cutThisRound) {
+                    // 正常执行的一轮：连续截断计数归零，下一轮回到完整思考预算
+                    thinkingCutStreak = 0;
+                }
                 if (result.toolCalls.isEmpty()) {
                     // 长思考/长文把输出预算用光时，接口会以 max_tokens 收尾且没有工具调用。
                     // 以前这里直接结束整轮任务，用户看到的就是「想了一会儿就停了」。
                     // 现在自动续写：把已生成的部分作为 assistant 消息，追加一条「接着写」的提示。
                     if ("max_tokens".equals(result.stopReason) && autoContinues < MAX_AUTO_CONTINUES) {
                         autoContinues++;
-                        JSONObject partial = new JSONObject();
-                        partial.put("role", "assistant");
-                        partial.put("content", result.text.toString());
-                        messages.put(partial);
-                        JSONObject nudge = new JSONObject();
-                        nudge.put("role", "user");
-                        nudge.put("content", "（上一条输出达到长度上限被截断。请从中断处继续完成，不要重复已写内容，也不要重新开始。）");
-                        messages.put(nudge);
+                        if (result.text.length() > 0) {
+                            JSONObject partial = new JSONObject();
+                            partial.put("role", "assistant");
+                            partial.put("content", result.text.toString());
+                            messages.put(partial);
+                        }
+                        messages.put(nudgeMessage(
+                                "（上一条输出达到长度上限被截断。请从中断处继续完成，不要重复已写内容；"
+                                        + "如果是在思考阶段就用完了预算，请直接开始执行：调用工具或给出结论。）"));
                         emitStatus("输出达到上限，已自动继续（" + autoContinues + "/" + MAX_AUTO_CONTINUES + "）");
                         continue;
                     }
@@ -628,6 +768,86 @@ public final class AgentRunner {
     }
 
     /** 只给界面看的状态事件（模型看不到） */
+    /** 思考看门狗：思考超过本轮预算、又还没产出正文或工具调用时，中止本轮交给循环降档 */
+    private void maybeCutThinking(RoundResult result) throws ThinkingCutException {
+        if (suppressThinking || thinkingCuts >= MAX_THINKING_CUTS) {
+            return;
+        }
+        if (result.thinkingChars < thinkingCharLimit) {
+            return;
+        }
+        if (result.text.length() > 0 || !result.toolCalls.isEmpty()) {
+            return;
+        }
+        throw new ThinkingCutException(result.thinking.toString());
+    }
+
+    /**
+     * 本轮的思考预算：连续被截断时按 12K → 6K → 3K 收紧，成功执行一轮后恢复。
+     *
+     * 收紧只影响「什么时候中止」，不会关掉思考；中止后这一轮直接执行，
+     * 下一轮仍然带着思考开始——长任务因此保持「思考 → 调用 → 思考」的节奏。
+     */
+    private int thinkingBudgetForStreak() {
+        if (thinkingCutStreak <= 0) {
+            return THINKING_CHAR_LIMIT;
+        }
+        int budget = THINKING_CHAR_LIMIT >> Math.min(thinkingCutStreak, 2);
+        return Math.max(THINKING_CHAR_FLOOR, budget);
+    }
+
+    /**
+     * 思考被截断后的提示：把已经想出来的尾巴接上，要求立刻行动。
+     *
+     * 以前只说「关掉思考、直接执行」，已经烧掉的思考全丢；现在把最后一段带回去，
+     * 模型不用从零再推一遍，省下的是真正的思考预算。
+     */
+    private static String thinkingCutNudge(String partialThinking) {
+        String tail = thinkingTail(partialThinking);
+        StringBuilder text = new StringBuilder();
+        text.append("（上一条回复一直停在思考阶段，把输出预算用完被中止了，没有执行任何工具。")
+                .append("这次请跳过冗长分析，直接调用工具或给出结论。）");
+        if (!tail.isEmpty()) {
+            text.append("\n你被中止前最后想到的内容（接上它继续，不要整段复述）：\n").append(tail);
+        }
+        return text.toString();
+    }
+
+    /** 取思考的尾巴（尽量从换行处开始，避免半句话），长度受 THINKING_CARRY_CHARS 限制 */
+    private static String thinkingTail(String thinking) {
+        if (thinking == null) {
+            return "";
+        }
+        String flat = thinking.trim();
+        if (flat.isEmpty()) {
+            return "";
+        }
+        if (flat.length() <= THINKING_CARRY_CHARS) {
+            return flat;
+        }
+        String tail = flat.substring(flat.length() - THINKING_CARRY_CHARS);
+        int cut = tail.indexOf('\n');
+        if (cut >= 0 && cut < tail.length() / 2) {
+            tail = tail.substring(cut + 1);
+        }
+        return tail.trim();
+    }
+
+    private static JSONObject nudgeMessage(String text) throws Exception {
+        JSONObject nudge = new JSONObject();
+        nudge.put("role", "user");
+        nudge.put("content", text);
+        return nudge;
+    }
+
+    /** 历史太大时才裁剪：每轮都裁剪会改写旧消息，把服务端的缓存前缀打断 */
+    private void maybeTrimMessages(JSONArray messages) throws Exception {
+        if (messages.toString().length() < TRIM_THRESHOLD_CHARS) {
+            return;
+        }
+        trimMessages(messages);
+    }
+
     private void emitStatus(String text) {
         try {
             JSONObject event = new JSONObject();
@@ -1382,6 +1602,23 @@ public final class AgentRunner {
 
     private JSONObject assistantMessage(RoundResult result) throws Exception {
         JSONArray content = new JSONArray();
+        // 开思考时协议要求把 thinking 块连同签名原样回传，否则工具调用的下一轮会 400。
+        // 重试那一轮思考是关的、不会再产出 thinking，就把被截断的思考补回这条消息，
+        // 保证历史里的 assistant 消息在 thinking 模式下始终带着思考块。
+        // 只在 Anthropic 方言下发（OpenAI 兼容层不接受这个块）。
+        String thinkingText = result.thinking.length() > 0
+                ? result.thinking.toString()
+                : recoveryThinking;
+        if ("anthropic".equals(protocol) && !thinkingText.isEmpty()) {
+            JSONObject thinking = new JSONObject();
+            thinking.put("type", "thinking");
+            thinking.put("thinking", thinkingText);
+            String signature = result.thinkingSignature.toString();
+            if (!signature.isEmpty()) {
+                thinking.put("signature", signature);
+            }
+            content.put(thinking);
+        }
         if (result.text.toString().trim().length() > 0) {
             JSONObject text = new JSONObject();
             text.put("type", "text");
@@ -1491,9 +1728,15 @@ public final class AgentRunner {
             body.put("tools", tools);
         }
         // Anthropic 原生协议下，思考开关是 thinking:{type:…}；只有明确支持的端点才带，
-        // 否则某些「自称 anthropic 兼容」的中转会直接 400。Agent 区默认不开思考。
+        // 否则某些「自称 anthropic 兼容」的中转会直接 400。
         if (ProviderCompat.THINKING_ANTHROPIC.equals(ProviderCompat.thinkingStyle(provider, protocol))) {
-            body.put("thinking", new JSONObject().put("type", "disabled"));
+            boolean active = thinking && !suppressThinking;
+            JSONObject think = new JSONObject().put("type", active ? "enabled" : "disabled");
+            if (active && ProviderCompat.ANTHROPIC.equals(provider)) {
+                // Claude 用 budget_tokens 给思考设硬预算，保证还能留下正文预算
+                think.put("budget_tokens", 4096);
+            }
+            body.put("thinking", think);
         }
 
         String baseUrl = anthropicBaseUrl();
@@ -1518,12 +1761,12 @@ public final class AgentRunner {
         int status = connection.getResponseCode();
         if (status >= 400) {
             String text = readAll(connection.getErrorStream());
-            throw new IOException("HTTP " + status + (text.isEmpty() ? "" : "：" + abbreviate(text, 800)));
+            throw new IOException("HTTP " + status + (text.isEmpty() ? "" : "：" + abbreviate(text, 800)) + HTTP_HINT);
         }
         String contentType = connection.getContentType();
         if (contentType == null || !contentType.contains("text/event-stream")) {
             String text = readAll(connection.getInputStream());
-            throw new IOException("服务端没有返回 SSE（" + contentType + "）：" + abbreviate(text, 500));
+            throw new IOException("服务端没有返回 SSE（" + contentType + "）：" + abbreviate(text, 500) + HTTP_HINT);
         }
 
         RoundResult result = new RoundResult();
@@ -1565,6 +1808,10 @@ public final class AgentRunner {
             connection.disconnect();
             activeConnection = null;
         }
+        if (result.text.length() == 0 && result.toolCalls.isEmpty() && !result.sawThinking
+                && !"max_tokens".equals(result.stopReason)) {
+            throw new IOException(EMPTY_REPLY_HINT);
+        }
         return result;
     }
 
@@ -1601,6 +1848,17 @@ public final class AgentRunner {
         if (ProviderCompat.supportsStreamOptions(provider)) {
             body.put("stream_options", new JSONObject().put("include_usage", true));
         }
+        // OpenAI 方言的思考开关按供应商各不相同（enable_thinking / thinking 对象 / reasoning_effort）
+        if (thinking && !suppressThinking) {
+            String style = ProviderCompat.thinkingStyle(provider, protocol);
+            if (ProviderCompat.THINKING_ENABLE.equals(style)) {
+                body.put("enable_thinking", true);
+            } else if (ProviderCompat.THINKING_OBJECT.equals(style)) {
+                body.put("thinking", new JSONObject().put("type", "enabled"));
+            } else if (ProviderCompat.THINKING_EFFORT.equals(style)) {
+                body.put("reasoning_effort", "medium");
+            }
+        }
 
         URL url = new URL(baseUrl + "/chat/completions");
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
@@ -1619,12 +1877,12 @@ public final class AgentRunner {
         int status = connection.getResponseCode();
         if (status >= 400) {
             String text = readAll(connection.getErrorStream());
-            throw new IOException("HTTP " + status + (text.isEmpty() ? "" : "：" + abbreviate(text, 800)));
+            throw new IOException("HTTP " + status + (text.isEmpty() ? "" : "：" + abbreviate(text, 800)) + HTTP_HINT);
         }
         String contentType = connection.getContentType();
         if (contentType == null || !contentType.contains("text/event-stream")) {
             String text = readAll(connection.getInputStream());
-            throw new IOException("服务端没有返回 SSE（" + contentType + "）：" + abbreviate(text, 500));
+            throw new IOException("服务端没有返回 SSE（" + contentType + "）：" + abbreviate(text, 500) + HTTP_HINT);
         }
 
         Map<Integer, ToolCall> calls = new HashMap<>();
@@ -1656,7 +1914,18 @@ public final class AgentRunner {
                 }
                 JSONObject usage = chunk.optJSONObject("usage");
                 if (usage != null) {
-                    result.inputTokens = usage.optInt("prompt_tokens", result.inputTokens);
+                    int prompt = usage.optInt("prompt_tokens", result.inputTokens);
+                    int cached = 0;
+                    JSONObject details = usage.optJSONObject("prompt_tokens_details");
+                    if (details != null) {
+                        cached = details.optInt("cached_tokens", 0);
+                    }
+                    if (cached == 0) {
+                        // DeepSeek 的 OpenAI 方言用 prompt_cache_hit_tokens
+                        cached = usage.optInt("prompt_cache_hit_tokens", 0);
+                    }
+                    result.cacheReadInputTokens = cached;
+                    result.inputTokens = Math.max(0, prompt - cached);
                     result.outputTokens = usage.optInt("completion_tokens", result.outputTokens);
                 }
                 JSONArray choices = chunk.optJSONArray("choices");
@@ -1675,7 +1944,7 @@ public final class AgentRunner {
                 if (delta == null) {
                     continue;
                 }
-                String text = delta.optString("content", "");
+                String text = str(delta, "content");
                 if (!text.isEmpty()) {
                     if (result.firstTokenAt == 0) {
                         result.firstTokenAt = SystemClock.elapsedRealtime();
@@ -1683,12 +1952,16 @@ public final class AgentRunner {
                     result.text.append(text);
                     emitDelta("text", text);
                 }
-                String thinking = delta.optString("reasoning_content", "");
-                if (thinking.isEmpty()) {
-                    thinking = delta.optString("reasoning", "");
+                String reasoning = str(delta, "reasoning_content");
+                if (reasoning.isEmpty()) {
+                    reasoning = str(delta, "reasoning");
                 }
-                if (!thinking.isEmpty()) {
-                    emitDelta("thinking", thinking);
+                if (!reasoning.isEmpty()) {
+                    result.sawThinking = true;
+                    result.thinking.append(reasoning);
+                    result.thinkingChars += reasoning.length();
+                    emitDelta("thinking", reasoning);
+                    maybeCutThinking(result);
                 }
                 JSONArray toolCalls = delta.optJSONArray("tool_calls");
                 if (toolCalls == null) {
@@ -1706,12 +1979,12 @@ public final class AgentRunner {
                         arguments.put(index, buffer);
                     }
                     JSONObject function = item.optJSONObject("function");
-                    String partial = function == null ? "" : function.optString("arguments", "");
+                    String partial = function == null ? "" : str(function, "arguments");
                     if (!partial.isEmpty()) {
                         buffer.append(partial);
                     }
-                    String id = item.optString("id", "");
-                    String name = function == null ? "" : function.optString("name", "");
+                    String id = str(item, "id");
+                    String name = function == null ? "" : str(function, "name");
                     if (calls.get(index) == null && (!id.isEmpty() || !name.isEmpty())) {
                         ToolCall call = new ToolCall(
                                 id.isEmpty() ? java.util.UUID.randomUUID().toString() : id,
@@ -1739,6 +2012,10 @@ public final class AgentRunner {
         }
         result.stopReason = OpenAiWire.stopReason(finish);
         emitUsage(result);
+        if (result.text.length() == 0 && result.toolCalls.isEmpty() && !result.sawThinking
+                && !"max_tokens".equals(result.stopReason)) {
+            throw new IOException(EMPTY_REPLY_HINT);
+        }
         return result;
     }
 
@@ -1746,6 +2023,8 @@ public final class AgentRunner {
         JSONObject event = new JSONObject();
         event.put("type", type);
         event.put("delta", text);
+        // 思考/正文都属于「第 N 轮」：界面按轮分卡，用户能对上每轮的工具
+        event.put("round", currentRound);
         emit(event);
     }
 
@@ -1770,7 +2049,8 @@ public final class AgentRunner {
         String type = root.optString("type", eventName);
         if ("error".equals(type)) {
             JSONObject error = root.optJSONObject("error");
-            throw new IOException(error == null ? data : error.optString("message", data));
+            String message = error == null ? "" : str(error, "message");
+            throw new IOException(message.isEmpty() ? data : message);
         }
         switch (type) {
             case "message_start": {
@@ -1785,9 +2065,12 @@ public final class AgentRunner {
             case "content_block_start": {
                 JSONObject block = root.optJSONObject("content_block");
                 if (block != null && "tool_use".equals(block.optString("type"))) {
-                    ToolCall call = new ToolCall(block.optString("id"), block.optString("name"));
+                    ToolCall call = new ToolCall(str(block, "id"), str(block, "name"));
                     callsByIndex.put(root.optInt("index", result.toolCalls.size()), call);
                     result.toolCalls.add(call);
+                } else if (block != null && "thinking".equals(block.optString("type"))) {
+                    // 少数兼容层把签名放在 block 开头，多数走 signature_delta
+                    result.thinkingSignature.append(str(block, "signature"));
                 }
                 break;
             }
@@ -1798,7 +2081,7 @@ public final class AgentRunner {
                 }
                 String deltaType = delta.optString("type");
                 if ("text_delta".equals(deltaType)) {
-                    String text = delta.optString("text");
+                    String text = str(delta, "text");
                     if (result.firstTokenAt == 0 && !text.isEmpty()) {
                         result.firstTokenAt = SystemClock.elapsedRealtime();
                     }
@@ -1808,14 +2091,22 @@ public final class AgentRunner {
                     event.put("delta", text);
                     emit(event);
                 } else if ("thinking_delta".equals(deltaType)) {
-                    JSONObject event = new JSONObject();
-                    event.put("type", "thinking");
-                    event.put("delta", delta.optString("thinking"));
-                    emit(event);
+                    String thought = str(delta, "thinking");
+                    if (!thought.isEmpty()) {
+                        result.sawThinking = true;
+                        result.thinking.append(thought);
+                        result.thinkingChars += thought.length();
+                        // 走 emitDelta，事件里才会带上 round（界面按轮分卡）
+                        emitDelta("thinking", thought);
+                        maybeCutThinking(result);
+                    }
+                } else if ("signature_delta".equals(deltaType)) {
+                    // 思考块签名：下一轮要原样回传，否则工具调用会 400
+                    result.thinkingSignature.append(str(delta, "signature"));
                 } else if ("input_json_delta".equals(deltaType)) {
                     ToolCall call = callsByIndex.get(root.optInt("index", -1));
                     if (call != null) {
-                        call.arguments.append(delta.optString("partial_json"));
+                        call.arguments.append(str(delta, "partial_json"));
                     }
                 }
                 break;
@@ -1823,7 +2114,7 @@ public final class AgentRunner {
             case "message_delta": {
                 JSONObject delta = root.optJSONObject("delta");
                 if (delta != null) {
-                    String stop = delta.optString("stop_reason", "");
+                    String stop = str(delta, "stop_reason");
                     if (!stop.isEmpty()) {
                         result.stopReason = stop;
                     }
@@ -1876,6 +2167,20 @@ public final class AgentRunner {
 
     private static String abbreviate(String text, int limit) {
         return text.length() <= limit ? text : text.substring(0, limit) + "\n…（已截断）";
+    }
+
+    /**
+     * 安全读取字符串字段。
+     *
+     * org.json 的 {@code optString} 在值是 JSON null 时会返回**字符串 "null"**，
+     * 直接拼进正文就会出现满屏 null（百炼等兼容层在 tool_call 分片里就爱发 content:null）。
+     */
+    private static String str(JSONObject json, String key) {
+        if (json == null) {
+            return "";
+        }
+        Object value = json.opt(key);
+        return value instanceof String ? (String) value : "";
     }
 }
 

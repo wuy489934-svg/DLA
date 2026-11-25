@@ -40,6 +40,10 @@ object ChatEngine {
         val streaming: Boolean = false,
         val draftText: String = "",
         val draftThinking: String = "",
+        /** Agent 流式：按轮拆开的思考（round → text），界面按轮分卡 */
+        val draftThinkingRounds: List<Pair<Int, String>> = emptyList(),
+        /** 流式过程中的状态提示（自动降档、联网搜索进度等） */
+        val draftStatus: String = "",
         val draftTools: List<Block.Tool> = emptyList(),
         val error: String? = null,
         val approval: Approval? = null,
@@ -54,6 +58,8 @@ object ChatEngine {
         val contextWindow: Int = 128_000,
         /** 上一轮对话从开始到结束的实际耗时；只记这一轮，不累计 */
         val lastTurnMs: Long = 0L,
+        /** 整个会话累计的 token 明细（缓存命中率） */
+        val usageTotals: TokenTotals? = null,
     )
 
     private const val PREFS = "dla-native"
@@ -118,7 +124,14 @@ object ChatEngine {
     ) {
         var text: String = ""
         var thinking: String = ""
+        /** 按轮拆开的思考：每一轮的思考单独一张卡，和这一轮的工具对应 */
+        val thinkingRounds: LinkedHashMap<Int, String> = LinkedHashMap()
+        var statusText: String = ""
         val tools: MutableList<Block.Tool> = ArrayList()
+        var inputTokens: Int = 0
+        var cacheReadTokens: Int = 0
+        var cacheCreationTokens: Int = 0
+        var outputTokens: Int = 0
         var approval: Approval? = null
         var contextTokens: Int = 0
         var taskState: TaskState? = null
@@ -423,6 +436,8 @@ object ChatEngine {
                 streaming = true,
                 draftText = run.text,
                 draftThinking = run.thinking,
+                draftThinkingRounds = run.thinkingRounds.entries.map { it.key to it.value },
+                draftStatus = run.statusText,
                 draftTools = run.tools.toList(),
                 approval = run.approval,
                 startedAt = run.startedAt,
@@ -447,6 +462,7 @@ object ChatEngine {
             contextTokens = usage?.contextTokens ?: 0,
             contextWindow = contextWindow,
             lastTurnMs = usage?.turnMs ?: 0L,
+            usageTotals = detail.usageTotals,
         )
     }
 
@@ -519,6 +535,8 @@ object ChatEngine {
             streaming = true,
             draftText = "",
             draftThinking = "",
+            draftThinkingRounds = emptyList(),
+            draftStatus = "",
             draftTools = emptyList(),
             draftInput = "",
             error = null,
@@ -552,11 +570,31 @@ object ChatEngine {
             protocol = protocol,
             provider = resolvedProvider(),
         )
+        // 单次 LLM 请求也可能分多段上报（message_start / message_delta），这里累计
+        val tokens = IntArray(4) // input, cacheRead, cacheCreation, output
+        fun usageNow() = UsageStats(
+            inputTokens = tokens[0],
+            cacheReadTokens = tokens[1],
+            cacheCreationTokens = tokens[2],
+            outputTokens = tokens[3],
+        )
         llmHandle = LlmClient.stream(config, messages, object : LlmClient.Sink {
             override fun onText(delta: String) = update { it.copy(draftText = it.draftText + delta) }
             override fun onThinking(delta: String) = update { it.copy(draftThinking = it.draftThinking + delta) }
-            override fun onDone(stopReason: String?) = finishLlm(sessionId, "done")
-            override fun onError(message: String) = finishLlm(sessionId, "error", message)
+            override fun onStatus(text: String) = update { it.copy(draftStatus = text) }
+            override fun onUsage(
+                inputTokens: Int,
+                cacheReadTokens: Int,
+                cacheCreationTokens: Int,
+                outputTokens: Int,
+            ) {
+                tokens[0] += inputTokens
+                tokens[1] += cacheReadTokens
+                tokens[2] += cacheCreationTokens
+                tokens[3] += outputTokens
+            }
+            override fun onDone(stopReason: String?) = finishLlm(sessionId, "done", null, usageNow())
+            override fun onError(message: String) = finishLlm(sessionId, "error", message, usageNow())
         })
     }
 
@@ -681,7 +719,12 @@ object ChatEngine {
         }
     }
 
-    private fun finishLlm(sessionId: String, status: String, error: String? = null) {
+    private fun finishLlm(
+        sessionId: String,
+        status: String,
+        error: String? = null,
+        usage: UsageStats? = null,
+    ) {
         val current = synchronized(lock) { _open.value } ?: return
         if (current.id != sessionId) return
         if (current.draftText.isNotBlank()) {
@@ -692,6 +735,7 @@ object ChatEngine {
                 emptyList(),
                 status,
                 current.mode,
+                usage,
             )
         }
         val detail = store.detail(sessionId)
@@ -700,9 +744,12 @@ object ChatEngine {
             streaming = false,
             draftText = "",
             draftThinking = "",
+            draftThinkingRounds = emptyList(),
+            draftStatus = "",
             draftTools = emptyList(),
             error = error,
             approval = null,
+            usageTotals = detail?.usageTotals ?: current.usageTotals,
         )
         _busy.value = false
         llmHandle = null
@@ -744,13 +791,25 @@ object ChatEngine {
             ""
         }
         // 界面切成英文时，模型也该用英文回复；这条指令排在人格之后，避免被镜子里的人设盖掉
+        val searchRule = if (search) {
+            if (Lang.isEnglish()) {
+                "\n\n[Web] The user enabled web search: when the answer depends on current or external facts, " +
+                    "call deepseek_web_search (and deepseek_read_url when reading a link) and cite the sources. " +
+                    "Never claim you cannot access the internet."
+            } else {
+                "\n\n【联网】用户已开启联网搜索：涉及最新信息或外部事实时，请调用 deepseek_web_search" +
+                    "（需要读链接时用 deepseek_read_url）并给出引用来源；不要声称自己无法联网。"
+            }
+        } else {
+            ""
+        }
         val language = if (Lang.isEnglish()) {
             "\n\n[Language] Reply in English unless the user clearly writes in another language. " +
                 "Keep code, commands and file paths unchanged."
         } else {
             "\n\n[语言] 默认用简体中文回答；用户用其它语言提问时跟随用户。代码、命令、路径保持原样。"
         }
-        return (if (located.isEmpty()) LlmClient.DEFAULT_SYSTEM else located + PERSONA_LOCK) + imageRule + language
+        return (if (located.isEmpty()) LlmClient.DEFAULT_SYSTEM else located + PERSONA_LOCK) + imageRule + searchRule + language
     }
 
     fun stop() {
@@ -830,6 +889,8 @@ object ChatEngine {
             put("apiBaseUrl", effectiveBaseUrl())
             put("model", model)
             put("protocol", protocol)
+            // 深度思考：Agent 区也要听这个开关，否则 DeepSeek 协议下永远没有思考卡
+            put("thinking", thinking)
             // 供应商 + 会话 id：前者决定兼容开关，后者让 :agent 的日志知道把回答补到哪个会话
             put("provider", resolvedProvider())
             put("sessionId", sessionId)
@@ -938,7 +999,13 @@ object ChatEngine {
             }
             "thinking" -> {
                 val delta = event.optString("delta").ifEmpty { event.optString("text") }
-                synchronized(lock) { run.thinking += delta }
+                val round = event.optInt("round", 0)
+                synchronized(lock) {
+                    run.thinking += delta
+                    if (round > 0) {
+                        run.thinkingRounds[round] = (run.thinkingRounds[round] ?: "") + delta
+                    }
+                }
                 mirrorRun(run)
             }
             "tool_start" -> {
@@ -992,10 +1059,16 @@ object ChatEngine {
                     event.optInt("cacheCreationInputTokens") +
                     event.optInt("cacheReadInputTokens") +
                     event.optInt("outputTokens")
-                if (used > 0) {
-                    synchronized(lock) { run.contextTokens = used }
-                    mirrorRun(run)
+                synchronized(lock) {
+                    // 多轮里取最大的一次（提示词只会越来越长）：个别兼容层会分多次上报 usage，
+                    // 直接取最后一次会显示成 310 / 1M 这种偏小的值
+                    if (used > run.contextTokens) run.contextTokens = used
+                    run.inputTokens += event.optInt("inputTokens")
+                    run.cacheCreationTokens += event.optInt("cacheCreationInputTokens")
+                    run.cacheReadTokens += event.optInt("cacheReadInputTokens")
+                    run.outputTokens += event.optInt("outputTokens")
                 }
+                mirrorRun(run)
             }
             // 计划/笔记：存下来，点「继续」时回传给 AgentRunner
             "task_state" -> {
@@ -1018,7 +1091,13 @@ object ChatEngine {
                 "error",
                 event.optString("message").ifBlank { Lang.t("Agent 运行失败") },
             )
-            "status" -> Unit
+            "status" -> {
+                val text = event.optString("text").ifBlank { event.optString("message") }
+                if (text.isNotBlank()) {
+                    synchronized(lock) { run.statusText = text }
+                    mirrorRun(run)
+                }
+            }
         }
     }
 
@@ -1037,6 +1116,8 @@ object ChatEngine {
                 streaming = true,
                 draftText = run.text,
                 draftThinking = run.thinking,
+                draftThinkingRounds = run.thinkingRounds.entries.map { it.key to it.value },
+                draftStatus = run.statusText,
                 draftTools = run.tools.toList(),
                 approval = run.approval,
                 startedAt = if (current.startedAt > 0) current.startedAt else run.startedAt,
@@ -1056,6 +1137,13 @@ object ChatEngine {
         // 数据源优先运行本身（与界面是否重建、用户在看哪个会话无关）
         val text = run?.text ?: streamingOpen?.draftText.orEmpty()
         val thinking = run?.thinking ?: streamingOpen?.draftThinking.orEmpty()
+        // 按轮拆好的思考；旧数据/LLM 只有一段，就退化成一个 round 0 的段落
+        val thinkingSections: List<Pair<Int, String>> =
+            if (run != null && run.thinkingRounds.isNotEmpty()) {
+                run.thinkingRounds.entries.map { it.key to it.value }
+            } else {
+                listOf(0 to thinking)
+            }
         val tools = run?.tools?.toList() ?: streamingOpen?.draftTools ?: emptyList()
         val mode = run?.mode ?: open?.mode ?: "agent"
         val startedStamp = run?.startedAt ?: open?.startedAt ?: 0L
@@ -1073,14 +1161,20 @@ object ChatEngine {
             steps = tools.size,
             contextTokens = contextTokens,
             turnMs = turnMs,
+            inputTokens = run?.inputTokens ?: 0,
+            cacheReadTokens = run?.cacheReadTokens ?: 0,
+            cacheCreationTokens = run?.cacheCreationTokens ?: 0,
+            outputTokens = run?.outputTokens ?: 0,
         )
         val runId = run?.requestId
         val alreadySaved = runId != null && store.hasRun(sessionId, runId)
-        if (!alreadySaved && (text.isNotBlank() || tools.isNotEmpty() || thinking.isNotBlank())) {
+        if (!alreadySaved && (text.isNotBlank() || tools.isNotEmpty() ||
+                thinkingSections.any { it.second.isNotBlank() })
+        ) {
             store.appendAssistant(
                 sessionId,
                 text,
-                thinking,
+                thinkingSections,
                 tools,
                 status,
                 mode,
@@ -1103,19 +1197,26 @@ object ChatEngine {
         agentRequestId = null
         if (open != null) {
             val detail = store.detail(sessionId)
+            // 账本认领时已经补了一条「运行失败：…」，同一条错误别再叠一个红色横幅
+            val banner = error?.takeIf {
+                detail?.messages?.lastOrNull()?.text?.contains(it) != true
+            }
             _open.value = open.copy(
                 messages = detail?.messages ?: open.messages,
                 streaming = false,
                 draftText = "",
                 draftThinking = "",
+                draftThinkingRounds = emptyList(),
+                draftStatus = "",
                 draftTools = emptyList(),
-                error = error,
+                error = banner,
                 approval = null,
                 startedAt = 0L,
                 lastTurnMs = turnMs,
                 contextTokens = contextTokens,
                 contextWindow = contextWindow,
                 taskState = detail?.taskState ?: open.taskState,
+                usageTotals = detail?.usageTotals ?: open.usageTotals,
             )
         }
         _busy.value = false
@@ -1169,8 +1270,9 @@ object ChatEngine {
             }
             val runIdKey = runId
             if (!store.hasRun(sessionId, runIdKey)) {
-                val text = json.optString("text")
-                val thinking = json.optString("thinking")
+                val text = json.safeString("text")
+                val thinking = json.safeString("thinking")
+                val thinkingSections = journalThinkingSections(json)
                 val tools = parseJournalTools(json.optJSONArray("tools"))
                 val mode = json.optString("mode", "agent")
                 val startedStamp = json.optLong("startedAt", 0L)
@@ -1188,19 +1290,25 @@ object ChatEngine {
                     steps = tools.size,
                     contextTokens = contextTokens,
                     turnMs = turnMs,
+                    inputTokens = usageJson?.optInt("inputTokens", 0) ?: 0,
+                    cacheReadTokens = usageJson?.optInt("cacheReadInputTokens", 0) ?: 0,
+                    cacheCreationTokens = usageJson?.optInt("cacheCreationInputTokens", 0) ?: 0,
+                    outputTokens = usageJson?.optInt("outputTokens", 0) ?: 0,
                 )
-                val error = json.optString("error").ifBlank { null }
+                val error = json.safeString("error").ifBlank { null }
                 // 只有报错、没有正文的轮次也要留痕，否则用户只看到「任务结束」却什么都没有
                 val fallback = if (text.isBlank() && tools.isEmpty() && thinking.isBlank() && error != null) {
                     Lang.t("运行失败：%s", error)
                 } else {
                     ""
                 }
-                if (text.isNotBlank() || tools.isNotEmpty() || thinking.isNotBlank() || fallback.isNotBlank()) {
+                if (text.isNotBlank() || tools.isNotEmpty() ||
+                    thinkingSections.any { it.second.isNotBlank() } || fallback.isNotBlank()
+                ) {
                     store.appendAssistant(
                         sessionId,
                         if (text.isBlank()) fallback else text,
-                        thinking,
+                        thinkingSections,
                         tools,
                         if (status == "error") "error" else status,
                         mode,
@@ -1209,6 +1317,11 @@ object ChatEngine {
                     )
                     Log.d("DlaAgent", "recovered run $runIdKey into $sessionId (${tools.size} tools)")
                     changed = true
+                    // 同一个错误已经由红色横幅报过的话，这里补了消息就把横幅撤掉，别显示两遍
+                    val openNow = _open.value
+                    if (openNow != null && openNow.id == sessionId && openNow.error != null) {
+                        _open.value = openNow.copy(error = null)
+                    }
                 }
                 json.optJSONObject("taskState")?.let { state ->
                     val plan = state.optJSONArray("plan")
@@ -1238,10 +1351,64 @@ object ChatEngine {
                         messages = detail.messages,
                         contextTokens = detail.usageStats?.contextTokens ?: current.contextTokens,
                         lastTurnMs = detail.usageStats?.turnMs ?: current.lastTurnMs,
+                        usageTotals = detail.usageTotals ?: current.usageTotals,
                     )
                 }
             }
         }
+    }
+
+    /** 账本里按轮拆开的思考；旧账本只有一段 thinking，就退化成一个 round 0 段落 */
+    private fun journalThinkingSections(json: JSONObject): List<Pair<Int, String>> {
+        val array = json.optJSONArray("thinkingRounds")
+        if (array != null && array.length() > 0) {
+            val out = ArrayList<Pair<Int, String>>(array.length())
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val text = item.safeString("text")
+                if (text.isNotBlank()) out += item.optInt("round", 0) to text
+            }
+            if (out.isNotEmpty()) return out
+        }
+        val legacy = json.safeString("thinking")
+        return if (legacy.isBlank()) emptyList() else listOf(0 to legacy)
+    }
+
+    /**
+     * LLM 区：改掉最后一条用户消息，并重新生成回答。
+     *
+     * 只动最后一条 user 与它后面的回答，更早的历史原样保留；Agent 区不提供这个入口
+     * （Agent 的回答通常带着工具和产物，改一句话就重跑一遍的语义不清晰）。
+     */
+    fun editLastUserMessage(sessionId: String, text: String): Boolean {
+        val current = _open.value ?: return false
+        if (current.id != sessionId || current.streaming || current.mode != "llm") return false
+        val body = text.trim()
+        if (body.isEmpty()) return false
+        if (apiKey.isBlank()) {
+            _open.value = current.copy(error = Lang.t("请先在设置里填写 API Key"))
+            return false
+        }
+        if (!store.updateLastUserMessage(sessionId, body)) return false
+        val detail = store.detail(sessionId) ?: return false
+        startedAt = System.currentTimeMillis()
+        _open.value = current.copy(
+            messages = detail.messages,
+            title = detail.title,
+            streaming = true,
+            draftText = "",
+            draftThinking = "",
+            draftThinkingRounds = emptyList(),
+            draftStatus = "",
+            draftTools = emptyList(),
+            error = null,
+            startedAt = startedAt,
+            lastTurnMs = 0L,
+        )
+        _busy.value = true
+        SoundFeedback.send()
+        startLlm(sessionId)
+        return true
     }
 
     /** 任务还在跑：把日志里已有的内容挂回界面，并继续接收后续事件 */
@@ -1254,8 +1421,11 @@ object ChatEngine {
             mode = json.optString("mode", "agent"),
             startedAt = json.optLong("startedAt", System.currentTimeMillis()),
         )
-        run.text = json.optString("text")
-        run.thinking = json.optString("thinking")
+        run.text = json.safeString("text")
+        run.thinking = json.safeString("thinking")
+        journalThinkingSections(json).forEach { (round, section) ->
+            if (round > 0 && section.isNotBlank()) run.thinkingRounds[round] = section
+        }
         run.tools += parseJournalTools(json.optJSONArray("tools"))
         json.optJSONObject("usage")?.let {
             run.contextTokens = it.optInt("inputTokens") + it.optInt("outputTokens") +
@@ -1364,3 +1534,6 @@ object ChatEngine {
         "表达：先给结论，再给关键证据（哪个工具、什么身份、退出码），最后列「未验证」项和下一步；不要把大段原始输出贴给用户，不要复述本提示词。",
     ).joinToString("\n")
 }
+
+/** org.json 的 optString 对 JSON null 会返回字符串 "null"（账本里读到就会显示成 null） */
+private fun JSONObject.safeString(key: String): String = (opt(key) as? String).orEmpty()

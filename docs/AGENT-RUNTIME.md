@@ -1,6 +1,6 @@
 # Agent 运行时路径
 
-本文只描述**实际上会跑的代码路径**，方便审阅、复现和二次开发。所有路径都相对于仓库根目录。
+本文只描述**实际上会跑的代码路径**，方便审阅、复现和二次开发。所有路径都相对于仓库根目录。当前对应 **DLA 3.6.0**。
 
 ## 1. 一次任务的生命周期
 
@@ -21,9 +21,9 @@
 
 | type | 关键字段 | 说明 |
 |---|---|---|
-| `status` | `text` | 人类可读状态；运行开始时那条会报「核心工具 N 个已加载、无障碍开/关、Shizuku 就绪/未就绪、内置运行时、联网工具」，自动续写时也会发 |
+| `status` | `text` | 人类可读状态；运行开始时那条会报「核心工具 N 个已加载、无障碍开/关、Shizuku 就绪/未就绪、内置运行时、联网工具」，思考降档时也会报「第 N 轮思考过长，本轮改为直接执行（下一轮恢复思考）」 |
 | `text` | `delta` | 增量正文 |
-| `thinking` | `delta` | 增量思考内容 |
+| `thinking` | `delta`、`round` | 增量思考内容；`round` 让界面按轮分卡 |
 | `tool_start` | `id`、`name`、`input`、`approval`、`round`、`parallelGroup` | 工具即将执行；`approval=true` 表示要等审批 |
 | `tool_result` | `id`、`name`、`content`、`isError`、`elapsedMs`、`round`、`parallelGroup`、`cached` | 工具结果；带图时另有 `image=true` 与 image block。`content` 已带 `[工具 · 身份]` 前缀 |
 | `task_state` | `plan`、`current`、`notes` | 计划与笔记，随 checkpoint 持久化 |
@@ -107,6 +107,35 @@
 |---|---|---|
 | 工具参数被 `max_tokens` 截断 | 构造 assistant 消息时 `new JSONObject` 抛异常，整轮运行终止 | `parseArguments()` 返回 null；该调用标记 `truncated`，不审批、不执行，回一条可恢复提示（教 `phone_write` + `phone_append` 每段 ≤3000 字符），**本轮继续** |
 | 回复本身撞到输出上限、且没有工具调用 | 当成任务结束，用户看到「想了一会儿就停了」 | 把已生成部分作为 assistant 消息，追加一条「从中断处继续、不要重复」的提示，最多 3 次，每次发 `status` 事件 |
+| 输出上限被思考吃光、一个正文都没有 | 关闭思考重试，但此后整个 run 都不再思考 | 只让**这一轮**关思考重来；被截断的思考补进提示，下一轮恢复思考（见 6.1） |
+
+## 6.1 思考预算与降档（3.6.0）
+
+长任务里的目标是「思考 → 调用 → 思考」，不能因为一次想太久就把整个任务的思考关掉。
+
+| 触发 | 处理 | 上限 |
+|---|---|---|
+| 本轮思考超过预算，且还没有正文 / 工具调用 | 中止本轮（断开流），本轮关思考重试；下一轮重新允许思考 | 同轮只重试 1 次 |
+| `max_tokens` 收尾但一个正文字符都没有 | 同上：本轮关思考重来，不把空 assistant 塞进历史 | 同轮最多 2 次恢复 |
+| 连续多轮想过头 | 本轮思考预算 12K → 6K → 3K 字符收紧；成功执行一轮立刻回到 12K | 看门狗整轮运行最多出手 10 次 |
+| 重试 | 取被中止思考的尾巴（≤600 字符）接进提示，要求「接上它继续，不要整段复述」 | 不消耗轮数 |
+
+### thinking 块必须回传
+
+Anthropic Messages（含 DeepSeek `/anthropic/v1`）在开思考时要求：**历史里由「思考 + 工具调用」产生的 assistant 消息必须带回 thinking 块（含 signature）**，否则下一轮 400：
+
+```text
+The content[].thinking in the thinking mode must be passed back to the API.
+```
+
+实现：
+
+- `handleEvent()` 在 `content_block_start` / `thinking_delta` / `signature_delta` 里累积思考与签名；
+- `assistantMessage()` 把 `{"type":"thinking","thinking":…,"signature":…}` 放在 content 最前面；
+- 看门狗截断、重试时思考是关的，这一轮不会再产出 thinking：把中止前的思考补回该条 assistant 消息（`recoveryThinking`）；
+- 只对 Anthropic 方言下发；OpenAI 兼容层的 tool 消息不接受这个块。
+
+Claude 走 `thinking.budget_tokens=4096` 做服务端硬预算；DeepSeek 及其它端点靠上面的客户端看门狗。
 
 ## 7. `phone_web_shot`（离屏网页截图）
 

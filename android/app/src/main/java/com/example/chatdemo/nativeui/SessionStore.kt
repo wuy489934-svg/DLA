@@ -231,10 +231,30 @@ class SessionStore(context: Context) {
         write(sessionId, json)
     }
 
+    /** 单段思考（LLM 区 / 旧调用）：等价于 round 0 的一段 */
     fun appendAssistant(
         sessionId: String,
         text: String,
         thinking: String,
+        tools: List<Block.Tool>,
+        status: String,
+        mode: String = "llm",
+        usage: UsageStats? = null,
+        runId: String? = null,
+    ) = appendAssistant(
+        sessionId, text, listOf(0 to thinking), tools, status, mode, usage, runId,
+    )
+
+    /**
+     * 写一条助手消息。
+     *
+     * [thinkingSections] 是「第几轮 → 那一轮的思考」，按轮把思考卡和该轮的工具卡交错写入，
+     * 界面就能还原「这一轮的思考 + 这一轮调了什么」，而不是一坨思考堆在最前面。
+     */
+    fun appendAssistant(
+        sessionId: String,
+        text: String,
+        thinkingSections: List<Pair<Int, String>>,
         tools: List<Block.Tool>,
         status: String,
         mode: String = "llm",
@@ -246,21 +266,36 @@ class SessionStore(context: Context) {
         val json = read(sessionId) ?: return
         val messages = json.optJSONArray("messages") ?: JSONArray().also { json.put("messages", it) }
         val blocks = JSONArray()
-        if (thinking.isNotBlank()) {
-            blocks.put(JSONObject().put("type", "thinking").put("thinking", thinking))
+        val thinkingByRound = LinkedHashMap<Int, String>()
+        thinkingSections.forEach { (round, section) ->
+            if (section.isNotBlank()) {
+                thinkingByRound[round] = (thinkingByRound[round] ?: "") + section
+            }
         }
-        for (tool in tools) {
-            blocks.put(
-                JSONObject()
-                    .put("type", "agent_tool")
-                    .put("id", tool.id)
-                    .put("name", tool.name)
-                    .put("status", tool.status)
-                    .put("input", tool.input)
-                    .put("result", tool.result ?: "")
-                    .put("elapsedMs", tool.elapsedMs)
-                    .put("round", tool.round)
-            )
+        val toolsByRound = tools.groupBy { it.round }
+        val rounds = (thinkingByRound.keys + toolsByRound.keys).sorted()
+        for (round in rounds) {
+            thinkingByRound[round]?.takeIf { it.isNotBlank() }?.let { section ->
+                blocks.put(
+                    JSONObject()
+                        .put("type", "thinking")
+                        .put("thinking", section)
+                        .put("round", round)
+                )
+            }
+            toolsByRound[round]?.forEach { tool ->
+                blocks.put(
+                    JSONObject()
+                        .put("type", "agent_tool")
+                        .put("id", tool.id)
+                        .put("name", tool.name)
+                        .put("status", tool.status)
+                        .put("input", tool.input)
+                        .put("result", tool.result ?: "")
+                        .put("elapsedMs", tool.elapsedMs)
+                        .put("round", tool.round)
+                )
+            }
         }
         if (text.isNotBlank()) {
             blocks.put(JSONObject().put("type", "text").put("text", text))
@@ -282,11 +317,49 @@ class SessionStore(context: Context) {
                     .put("rounds", usage.rounds)
                     .put("steps", usage.steps)
                     .put("contextTokens", usage.contextTokens)
-                    .put("turnMs", usage.turnMs),
+                    .put("turnMs", usage.turnMs)
+                    .put("inputTokens", usage.inputTokens)
+                    .put("cacheReadTokens", usage.cacheReadTokens)
+                    .put("cacheCreationTokens", usage.cacheCreationTokens)
+                    .put("outputTokens", usage.outputTokens),
             )
+            // 整个会话的累计：缓存命中率是「整个对话」的指标，不是单轮的
+            if (usage.inputTokens + usage.cacheReadTokens + usage.cacheCreationTokens + usage.outputTokens > 0) {
+                val totals = json.optJSONObject("usageTotals")
+                    ?: JSONObject().also { json.put("usageTotals", it) }
+                totals.put("input", totals.optInt("input", 0) + usage.inputTokens)
+                totals.put("cacheRead", totals.optInt("cacheRead", 0) + usage.cacheReadTokens)
+                totals.put("cacheCreation", totals.optInt("cacheCreation", 0) + usage.cacheCreationTokens)
+                totals.put("output", totals.optInt("output", 0) + usage.outputTokens)
+                totals.put("requests", totals.optInt("requests", 0) + 1)
+            }
         }
         json.put("updatedAt", System.currentTimeMillis())
         write(sessionId, json)
+    }
+
+    /**
+     * 改掉最后一条用户消息，并删掉它之后的消息（通常是它的回答）。
+     *
+     * LLM 区「编辑上一条并重新生成」用：改完立刻重跑，历史里不会留下改之前的旧回答。
+     */
+    fun updateLastUserMessage(sessionId: String, text: String): Boolean {
+        val json = read(sessionId) ?: return false
+        val messages = json.optJSONArray("messages") ?: return false
+        var lastUser = -1
+        for (i in 0 until messages.length()) {
+            if (messages.optJSONObject(i)?.optString("role") == "user") lastUser = i
+        }
+        if (lastUser < 0) return false
+        val kept = JSONArray()
+        for (i in 0..lastUser) {
+            kept.put(messages.optJSONObject(i) ?: JSONObject())
+        }
+        kept.optJSONObject(lastUser)?.put("content", text)
+        json.put("messages", kept)
+        json.put("updatedAt", System.currentTimeMillis())
+        write(sessionId, json)
+        return true
     }
 
     fun delete(sessionId: String) {

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`3.5.x` is the current line. Release candidates may change without notice.
+`3.6.x` is the current line. Release candidates may change without notice.
 
 ## Reporting a vulnerability
 

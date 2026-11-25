@@ -66,14 +66,14 @@ public final class OpenAiWire {
             }
             String type = block.optString("type");
             if ("text".equals(type)) {
-                text.append(block.optString("text"));
+                text.append(str(block, "text"));
             } else if ("tool_use".equals(type)) {
                 JSONObject input = block.optJSONObject("input");
                 calls.put(new JSONObject()
-                        .put("id", block.optString("id"))
+                        .put("id", str(block, "id"))
                         .put("type", "function")
                         .put("function", new JSONObject()
-                                .put("name", block.optString("name"))
+                                .put("name", str(block, "name"))
                                 .put("arguments", input == null ? "{}" : input.toString())));
             }
         }
@@ -88,6 +88,7 @@ public final class OpenAiWire {
     private static void appendUser(JSONArray out, JSONArray blocks) throws Exception {
         StringBuilder text = new StringBuilder();
         JSONArray parts = new JSONArray();
+        JSONArray toolImages = new JSONArray();
         for (int i = 0; i < blocks.length(); i++) {
             JSONObject block = blocks.optJSONObject(i);
             if (block == null) {
@@ -97,15 +98,16 @@ public final class OpenAiWire {
             if ("tool_result".equals(type)) {
                 out.put(new JSONObject()
                         .put("role", "tool")
-                        .put("tool_call_id", block.optString("tool_use_id"))
+                        .put("tool_call_id", str(block, "tool_use_id"))
                         .put("content", flatten(block.opt("content"))));
+                collectImages(block.opt("content"), toolImages);
             } else if ("image".equals(type)) {
                 JSONObject part = imagePart(block);
                 if (part != null) {
                     parts.put(part);
                 }
             } else if ("text".equals(type)) {
-                text.append(block.optString("text"));
+                text.append(str(block, "text"));
             }
         }
         if (parts.length() > 0) {
@@ -115,6 +117,35 @@ public final class OpenAiWire {
             out.put(new JSONObject().put("role", "user").put("content", parts));
         } else if (text.length() > 0) {
             out.put(new JSONObject().put("role", "user").put("content", text.toString()));
+        }
+        // 工具返回的图片：OpenAI 的 tool 消息只能放文本，所以紧跟一条 user 消息把图片带过去。
+        // 不这么做的话，即使模型本身支持视觉，也永远看不到 phone_web_shot / phone_view_image 的结果。
+        if (toolImages.length() > 0) {
+            JSONArray imageParts = new JSONArray();
+            imageParts.put(new JSONObject().put("type", "text")
+                    .put("text", "上面工具返回的图片如下，请直接查看（这是工具结果，不是用户新发的要求）："));
+            for (int i = 0; i < toolImages.length(); i++) {
+                imageParts.put(toolImages.get(i));
+            }
+            out.put(new JSONObject().put("role", "user").put("content", imageParts));
+        }
+    }
+
+    /** 从 tool_result 的 content 里挑出图片块，转成 image_url 部件 */
+    private static void collectImages(Object content, JSONArray out) throws Exception {
+        if (!(content instanceof JSONArray)) {
+            return;
+        }
+        JSONArray parts = (JSONArray) content;
+        for (int i = 0; i < parts.length(); i++) {
+            JSONObject part = parts.optJSONObject(i);
+            if (part == null || !"image".equals(part.optString("type"))) {
+                continue;
+            }
+            JSONObject image = imagePart(part);
+            if (image != null) {
+                out.put(image);
+            }
         }
     }
 
@@ -137,14 +168,22 @@ public final class OpenAiWire {
                 if (text.length() > 0) {
                     text.append('\n');
                 }
-                text.append(part.optString("text"));
+                text.append(str(part, "text"));
             } else if ("image".equals(type)) {
-                text.append("\n（图片结果：当前 OpenAI 兼容协议下工具结果只能回传文本，图片没有随结果发出去。"
-                        + "如果模型本身不支持视觉，它也看不到这张图；"
-                        + "需要看图请让用户把图片作为附件发到对话里，或换支持视觉的模型）");
+                text.append("\n（图片随后单独发给你，见下一条消息）");
             }
         }
         return text.toString();
+    }
+
+
+    /** org.json 的 optString 对 JSON null 会返回字符串 "null"，拼进正文就是满屏 null */
+    private static String str(JSONObject json, String key) {
+        if (json == null) {
+            return "";
+        }
+        Object value = json.opt(key);
+        return value instanceof String ? (String) value : "";
     }
 
     public static JSONObject imagePart(JSONObject block) throws Exception {

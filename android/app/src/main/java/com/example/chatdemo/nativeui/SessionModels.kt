@@ -30,7 +30,8 @@ data class SessionCard(
 /** 消息内容块 */
 sealed interface Block {
     data class Text(val text: String) : Block
-    data class Thinking(val text: String, val seconds: Double?) : Block
+    data class Thinking(val text: String, val seconds: Double?, /** Agent 迭代轮次；0 表示未知（旧数据 / LLM 区） */
+                        val round: Int = 0) : Block
     data class Tool(
         val id: String,
         val name: String,
@@ -93,6 +94,8 @@ data class SessionDetail(
     val taskState: TaskState? = null,
     /** 最近一轮的用量（轮/步、上下文占用、单轮耗时） */
     val usageStats: UsageStats? = null,
+    /** 整个会话累计的 token 明细（缓存命中率） */
+    val usageTotals: TokenTotals? = null,
 )
 
 /**
@@ -107,7 +110,32 @@ data class UsageStats(
     val steps: Int = 0,
     val contextTokens: Int = 0,
     val turnMs: Long = 0L,
+    /** 这一轮的 token 明细：缓存命中率要用 */
+    val inputTokens: Int = 0,
+    val cacheReadTokens: Int = 0,
+    val cacheCreationTokens: Int = 0,
+    val outputTokens: Int = 0,
 )
+
+/**
+ * 整个会话累计的 token 明细（每次助手回复累加）。
+ *
+ * 缓存命中率 = cacheRead / (input + cacheRead + cacheCreation)，
+ * 也就是「这一整个对话里，提示词有多少比例是从缓存读出来的」。
+ */
+data class TokenTotals(
+    val input: Int = 0,
+    val cacheRead: Int = 0,
+    val cacheCreation: Int = 0,
+    val output: Int = 0,
+    val requests: Int = 0,
+) {
+    val promptTotal: Int get() = input + cacheRead + cacheCreation
+    /** null 表示接口没给缓存字段，显示「—」而不是假的 0% */
+    val cachePercent: Int?
+        get() = if (promptTotal <= 0) null else Math.round(cacheRead * 100f / promptTotal)
+    val isEmpty: Boolean get() = requests == 0 && promptTotal == 0 && output == 0
+}
 
 /** Agent 任务状态：计划、当前步、笔记 */
 data class TaskState(
@@ -188,6 +216,7 @@ object SessionParser {
             draft = json.str("draft"),
             taskState = taskState(json.optJSONObject("taskState")),
             usageStats = usageStats(json.optJSONObject("usageStats")),
+            usageTotals = tokenTotals(json.optJSONObject("usageTotals")),
         )
     }.getOrNull()
 
@@ -207,6 +236,18 @@ object SessionParser {
         } else {
             stats
         }
+    }
+
+    private fun tokenTotals(json: JSONObject?): TokenTotals? {
+        if (json == null) return null
+        val totals = TokenTotals(
+            input = json.optInt("input", 0),
+            cacheRead = json.optInt("cacheRead", 0),
+            cacheCreation = json.optInt("cacheCreation", 0),
+            output = json.optInt("output", 0),
+            requests = json.optInt("requests", 0),
+        )
+        return if (totals.isEmpty) null else totals
     }
 
     private fun taskState(json: JSONObject?): TaskState? {
@@ -294,11 +335,12 @@ object SessionParser {
     }
 
     private fun block(json: JSONObject): Block = when (val type = json.str("type")) {
-        "text" -> Block.Text(json.str("text"))
+        "text" -> Block.Text(cleanLegacyNulls(json.str("text")))
         "thinking" -> Block.Thinking(
-            text = json.str("thinking"),
+            text = cleanLegacyNulls(json.str("thinking")),
             seconds = if (json.has("elapsedSeconds") && !json.isNull("elapsedSeconds"))
                 json.optDouble("elapsedSeconds", 0.0) else null,
+            round = json.optInt("round", 0),
         )
         "agent_tool" -> Block.Tool(
             id = json.str("id"),
@@ -310,5 +352,20 @@ object SessionParser {
             round = json.optInt("round", 0),
         )
         else -> Block.Other(type)
+    }
+}
+
+/** 3.5.0 之前把 JSON null 拼成了 "null"，老会话里会留下成片的 null：读的时候折成一句提示 */
+private val LEGACY_NULL_SPAM = Regex("(?:null){6,}")
+
+private fun cleanLegacyNulls(text: String): String {
+    if (text.length < 24 || !text.contains("null")) return text
+    val cleaned = LEGACY_NULL_SPAM.replace(text, "…").trim()
+    val meaningful = cleaned.replace("…", "").trim().length
+    // 整段几乎都是 null 噪音：直接说明原因，别只留一个省略号
+    return if (meaningful * 10 < text.length) {
+        "（这条回答是旧版本解析错误留下的，已隐藏；可以删除本会话重试）"
+    } else {
+        cleaned
     }
 }

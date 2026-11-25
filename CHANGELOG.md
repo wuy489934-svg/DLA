@@ -1,5 +1,41 @@
 # Changelog
 
+> **Termux note / Termux 状态（先读这条）**：Termux support was **removed entirely in 2.2**
+> and is **not** an optional backend — there is no `termux` tool, no RUN_COMMAND, no
+> Termux panel. The 3.5.0 and 3.6.0 releases do not touch Termux. Entries below that
+> mention Termux (1.4.x / 2.x) are kept for history only.
+>
+> **Termux 集成已在 2.2 整体删除，不是可选后端**；3.5.0 / 3.6.0 的更新与 Termux 无关。
+> 下文 1.4.x / 2.x 的 Termux 条目只是历史记录。
+
+## 3.6.0
+
+- **Thinking stays on for the whole task.** The old watchdog set a run-wide
+  `forceNoThinking` flag on the first overrun, so long tasks turned into tool-only
+  execution after round 23. Now `suppressThinking` applies to the current round's retry
+  only: every round starts with thinking enabled again. The truncated reasoning tail
+  (≤600 characters) is fed into the retry prompt so the model does not restart from
+  scratch, same-round retries do not consume a round, and repeated overruns tighten the
+  per-round budget 12K → 6K → 3K characters instead of switching thinking off for good.
+  A `max_tokens` round that produced nothing but thinking follows the same recovery path.
+- **Thinking blocks are passed back (Anthropic / DeepSeek requirement).** With thinking
+  enabled, assistant messages must carry the thinking block and its signature, otherwise
+  the next tool round fails with `The content[].thinking in the thinking mode must be
+  passed back to the API`. The SSE parser now accumulates `thinking` and
+  `signature_delta`, `assistantMessage()` puts the block first in `content`, and a
+  watchdog-truncated round re-attaches the abandoned thinking before the retry. The
+  block is only sent on the Anthropic dialect — OpenAI-compatible layers reject it.
+- **One collapsible Process card.** Every “round N” (thinking + that round's tools) used
+  to be its own card, which pushed long answers far down the screen. All rounds now live
+  in a single card below the iteration tree: expanded while the run streams, collapsed
+  once the message is stored, with a header showing rounds / steps / elapsed. The tree and
+  the card now count rounds the same way (a thinking-only round counts).
+- **Status bar reflow.** Cache hit rate and the current turn's elapsed time moved to their
+  own 12 sp line above the context bar instead of sharing one line with the ten dashed
+  segments.
+- **No Termux changes.** This release is about the agent loop and the UI; the Termux
+  integration is still gone (see the note at the top).
+
 ## 3.5.0
 
 - **One loop, two wire protocols.** The LLM and Agent areas can talk either Anthropic

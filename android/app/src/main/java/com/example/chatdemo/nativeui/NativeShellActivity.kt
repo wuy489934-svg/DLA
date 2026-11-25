@@ -922,6 +922,9 @@ private fun ModeChip(mode: String) {
 
 // @OptIn 与 @Composable 属于下面的 ChatScreen，接口这里不能挂
 
+/** 同一轮的「思考卡 + 这一轮的工具卡」：按轮交错，能一眼看出因果 */
+private data class RoundGroup(val round: Int, val blocks: List<Block>)
+
 /** 聊天列表的一行：消息拆成用户行 / 迭代树行 / 内容块行，便于按轮精确定位 */
 private sealed interface ChatRow {
     val key: String
@@ -937,6 +940,18 @@ private sealed interface ChatRow {
     data class BlockRow(val message: ChatMessage, val block: Block, val index: Int) : ChatRow {
         override val key: String = "${message.id}:b$index"
     }
+
+    /**
+     * 所有轮收成一张可折叠的「执行过程」大卡片：运行中默认展开，任务结束自动折叠。
+     * 以前每轮一张小卡，长任务里会有几十张卡把正文推得很远。
+     */
+    data class Rounds(
+        val message: ChatMessage,
+        val groups: List<RoundGroup>,
+        val totalMs: Long,
+    ) : ChatRow {
+        override val key: String = "${message.id}:rounds"
+    }
 }
 
 private fun buildRows(messages: List<ChatMessage>): List<ChatRow> {
@@ -948,11 +963,54 @@ private fun buildRows(messages: List<ChatMessage>): List<ChatRow> {
         }
         val rounds = buildRounds(message.blocks)
         if (rounds.isNotEmpty()) rows += ChatRow.Tree(message, rounds)
+        // 思考与工具按轮收进同一张大卡，放在迭代树下面
+        val groups = collectRoundGroups(message.blocks)
+        if (groups.isNotEmpty()) {
+            rows += ChatRow.Rounds(message, groups, message.elapsedMs)
+        }
+        // 正文块与「没有轮次」的旧思考/工具块单独成行（正常顺序里正文都在执行过程之后）
         message.blocks.forEachIndexed { index, block ->
+            val blockRound = when (block) {
+                is Block.Thinking -> block.round
+                is Block.Tool -> block.round
+                else -> 0
+            }
+            if (blockRound > 0) return@forEachIndexed
             rows += ChatRow.BlockRow(message, block, index)
         }
     }
     return rows
+}
+
+/** 把相邻、同轮的思考/工具块收成一组；正文块不参与 */
+private fun collectRoundGroups(blocks: List<Block>): List<RoundGroup> {
+    val groups = ArrayList<RoundGroup>()
+    var index = 0
+    while (index < blocks.size) {
+        val blockRound = when (val block = blocks[index]) {
+            is Block.Thinking -> block.round
+            is Block.Tool -> block.round
+            else -> 0
+        }
+        if (blockRound <= 0) {
+            index++
+            continue
+        }
+        val group = ArrayList<Block>()
+        while (index < blocks.size) {
+            val candidate = blocks[index]
+            val candidateRound = when (candidate) {
+                is Block.Thinking -> candidate.round
+                is Block.Tool -> candidate.round
+                else -> -1
+            }
+            if (candidateRound != blockRound) break
+            group += candidate
+            index++
+        }
+        groups += RoundGroup(blockRound, group)
+    }
+    return groups
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -968,6 +1026,8 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
     var pendingAttachments by remember(current?.id) { mutableStateOf<List<Attachment>>(emptyList()) }
     // 长按文本弹出的复制面板 / 点图后的非全覆盖预览
     var copyTarget by remember(current?.id) { mutableStateOf<String?>(null) }
+    // LLM 区「编辑上一条」：只对最后一条用户消息开放
+    var editTarget by remember(current?.id) { mutableStateOf<ChatMessage?>(null) }
     var previewTarget by remember(current?.id) { mutableStateOf<String?>(null) }
     // Agent 状态条的「本轮」计时：运行中每 0.5 秒刷新，结束后停在最终值
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -1039,6 +1099,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
     var showBrowser by remember(current?.id) { mutableStateOf(false) }
 
     val messages = current?.messages.orEmpty()
+    val lastUserId = remember(messages) { messages.lastOrNull { it.role == "user" }?.id }
     val rows = remember(messages) { buildRows(messages) }
     val reversed = remember(rows) { rows.asReversed() }
 
@@ -1091,7 +1152,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 .imePadding(),
         ) {
             if (current?.mode != "agent") {
-                QuickToggles()
+                QuickToggles(cachePercent = current?.usageTotals?.cachePercent)
             }
             LaunchedEffect(current?.streaming) {
                 while (current?.streaming == true) {
@@ -1131,6 +1192,10 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                                 row.message,
                                 onCopy = { copyTarget = it },
                                 onPreview = { previewTarget = it },
+                                editable = current?.mode == "llm" &&
+                                    current?.streaming != true &&
+                                    row.message.id == lastUserId,
+                                onEdit = { editTarget = row.message },
                             )
                             is ChatRow.Tree -> IterationTree(
                                 rounds = row.rounds,
@@ -1139,15 +1204,24 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                                 totalMs = row.message.elapsedMs,
                                 modifier = Modifier.fillMaxWidth(),
                                 onLocate = { round ->
+                                    // 所有轮都在同一张执行过程卡里，定位到这张卡即可
                                     val target = reversed.indexOfFirst {
-                                        it is ChatRow.BlockRow &&
+                                        it is ChatRow.Rounds &&
                                             it.message.id == row.message.id &&
-                                            (it.block as? Block.Tool)?.round == round
+                                            it.groups.any { group -> group.round == round }
                                     }
                                     if (target >= 0) {
                                         scope.launch { listState.animateScrollToItem(target) }
                                     }
                                 },
+                            )
+                            is ChatRow.Rounds -> AgentProcessCard(
+                                groups = row.groups,
+                                stateKey = row.message.id,
+                                streaming = false,
+                                totalMs = row.totalMs,
+                                messageId = row.message.id,
+                                onCopy = { copyTarget = it },
                             )
                             is ChatRow.BlockRow -> BlockRowView(
                                 row.block,
@@ -1173,6 +1247,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 AgentUsageBar(
                     usedTokens = current.contextTokens,
                     windowTokens = current.contextWindow,
+                    cachePercent = current.usageTotals?.cachePercent,
                     turnMs = if (current.streaming && current.startedAt > 0) {
                         (nowMs - current.startedAt).coerceAtLeast(0L)
                     } else {
@@ -1213,6 +1288,18 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 },
             )
         }
+    }
+
+    val editing = editTarget
+    if (editing != null && current != null) {
+        EditMessageDialog(
+            initial = editing.text,
+            onDismiss = { editTarget = null },
+            onConfirm = { edited ->
+                editTarget = null
+                ChatEngine.editLastUserMessage(current.id, edited)
+            },
+        )
     }
 
     if (showBrowser) {
@@ -1434,6 +1521,9 @@ private fun UserMessageRow(
     message: ChatMessage,
     onCopy: (String) -> Unit,
     onPreview: (String) -> Unit,
+    /** LLM 区：最后一条用户消息可以改完重答 */
+    editable: Boolean = false,
+    onEdit: () -> Unit = {},
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Column(horizontalAlignment = Alignment.End) {
@@ -1467,6 +1557,17 @@ private fun UserMessageRow(
                         .background(DlaColors.Mint.copy(alpha = 0.10f), RoundedCornerShape(16.dp))
                         .onLongPressText { onCopy(message.text) }
                         .padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+            if (editable) {
+                Text(
+                    Lang.t("编辑"),
+                    color = DlaColors.TextDim,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onEdit)
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                 )
             }
         }
@@ -1511,6 +1612,174 @@ private fun BlockRowView(block: Block, messageId: String, onCopy: (String) -> Un
         }
     }
 }
+/**
+ * 「执行过程」大卡片：把每一轮的思考卡与该轮工具卡收进同一张可折叠卡片。
+ *
+ * - 运行中的草稿默认展开（实时看到在想什么、调了什么），任务结束自动折叠；
+ * - 已经落盘的历史消息默认折叠，点一下能展开完整的思考与工具；
+ * - 每轮内部仍是原来的思考卡 / 工具卡，但不再各自带一圈外框，避免「卡片套卡片」。
+ */
+@Composable
+private fun AgentProcessCard(
+    groups: List<RoundGroup>,
+    stateKey: String,
+    streaming: Boolean,
+    totalMs: Long,
+    messageId: String,
+    onCopy: (String) -> Unit,
+) {
+    // stateKey 区分「这一次运行的草稿」与「某条历史消息」：换任务不会串状态
+    var expanded by rememberSaveable(stateKey) { mutableStateOf(streaming) }
+    val totalSteps = remember(groups) {
+        groups.sumOf { group -> group.blocks.count { block -> block is Block.Tool } }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(DlaColors.Surface.copy(alpha = 0.55f))
+            .border(1.dp, DlaColors.Mint.copy(alpha = 0.16f), RoundedCornerShape(14.dp)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .androidClickableSimple { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(DlaColors.Mint.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("⟳", color = DlaColors.Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(9.dp))
+            Text(
+                Lang.t("执行过程"),
+                color = DlaColors.Text,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                Lang.t("%d 轮", groups.size),
+                color = DlaColors.TextDim,
+                fontSize = 10.sp,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                Lang.t("%d 步", totalSteps),
+                color = DlaColors.TextDim,
+                fontSize = 10.sp,
+            )
+            Spacer(Modifier.weight(1f))
+            if (totalMs > 0) {
+                Text(
+                    formatElapsed(totalMs),
+                    color = DlaColors.TextDim,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(
+                if (expanded) Lang.t("收起") else Lang.t("展开"),
+                color = DlaColors.Mint,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(150)) + expandVertically(tween(180)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
+        ) {
+            Column {
+                groups.forEachIndexed { index, group ->
+                    if (index > 0) {
+                        HorizontalDivider(color = DlaColors.Line.copy(alpha = 0.7f))
+                    }
+                    RoundContent(
+                        round = group.round,
+                        blocks = group.blocks,
+                        messageId = messageId,
+                        onCopy = onCopy,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 大卡片里的一轮：标题「第 N 轮」+ 这一轮的思考/工具，不再单独包一层卡片 */
+@Composable
+private fun RoundContent(
+    round: Int,
+    blocks: List<Block>,
+    messageId: String,
+    onCopy: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(DlaColors.Mint.copy(alpha = 0.65f)),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                Lang.t("第 %d 轮", round),
+                color = DlaColors.TextDim,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        blocks.forEach { block ->
+            BlockRowView(block, messageId = messageId, onCopy = onCopy)
+        }
+    }
+}
+
+@Composable
+private fun EditMessageDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(Lang.t("修改这条消息")) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                minLines = 3,
+                maxLines = 10,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { if (text.isNotBlank()) onConfirm(text.trim()) }) {
+                Text(Lang.t("保存并重新生成"), color = DlaColors.Mint)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(Lang.t("取消")) }
+        },
+    )
+}
+
 @Composable
 private fun DraftMessage(open: ChatEngine.Open) {
     Column(
@@ -1519,15 +1788,52 @@ private fun DraftMessage(open: ChatEngine.Open) {
             .clipToBounds(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val rounds = remember(open.draftTools) { buildRoundsFromTools(open.draftTools) }
+        if (open.draftStatus.isNotBlank()) {
+            Text(
+                open.draftStatus,
+                color = DlaColors.Mint.copy(alpha = 0.85f),
+                fontSize = 11.sp,
+            )
+        }
+        // 流式时也按轮分块：每一轮的思考卡跟着这一轮的工具走，整轮收进同一张大卡
+        val groups = remember(open.draftThinkingRounds, open.draftTools) {
+            val byRound = java.util.TreeMap<Int, MutableList<Block>>()
+            open.draftThinkingRounds.forEach { (round, section) ->
+                if (section.isNotBlank()) {
+                    byRound.getOrPut(round) { ArrayList() } += Block.Thinking(section, null, round)
+                }
+            }
+            open.draftTools.forEach { tool ->
+                byRound.getOrPut(tool.round) { ArrayList() } += tool
+            }
+            byRound.map { (round, blocks) -> RoundGroup(round, blocks.toList()) }
+        }
+        // round = 0 的是 LLM 区的单段思考，不参与「第 N 轮」分组
+        groups.filter { it.round <= 0 }.forEach { group ->
+            group.blocks.forEach { block -> BlockRowView(block, messageId = "draft", onCopy = {}) }
+        }
+        val roundGroups = groups.filter { it.round > 0 }
+        // 迭代树与执行过程卡口径一致：有思考没工具的轮也算一轮
+        val rounds = roundGroups.map { group -> iterationRound(group) }
         if (rounds.isNotEmpty()) {
             IterationTree(rounds)
         }
-        open.draftTools.forEach { tool -> ToolCard(tool) }
-        if (open.draftThinking.isNotBlank()) {
+        if (roundGroups.isNotEmpty()) {
+            AgentProcessCard(
+                groups = roundGroups,
+                // 每次运行的 startedAt 都不同：换任务时大卡重新展开
+                stateKey = "draft-${open.startedAt}",
+                streaming = true,
+                totalMs = 0L,
+                messageId = "draft",
+                onCopy = {},
+            )
+        } else if (open.draftThinking.isNotBlank()) {
             ThinkingCard(open.draftThinking, null)
         }
-        if (open.draftThinking.isBlank() && open.draftText.isBlank() && open.draftTools.isEmpty()) {
+        if (open.draftThinking.isBlank() && open.draftThinkingRounds.isEmpty() &&
+            open.draftText.isBlank() && open.draftTools.isEmpty()
+        ) {
             TypingDots()
         }
         if (open.draftText.isNotBlank()) {
@@ -1712,7 +2018,7 @@ private fun ToolCard(block: Block.Tool) {
 // ---------------- 对话开关 ----------------
 
 @Composable
-private fun QuickToggles() {
+private fun QuickToggles(cachePercent: Int? = null) {
     var thinking by remember { mutableStateOf(ChatEngine.thinking) }
     var search by remember { mutableStateOf(ChatEngine.search) }
     Row(
@@ -1720,6 +2026,7 @@ private fun QuickToggles() {
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         ToggleChip(Lang.t("深度思考"), thinking) {
             thinking = !thinking
@@ -1728,6 +2035,15 @@ private fun QuickToggles() {
         ToggleChip(Lang.t("联网搜索"), search) {
             search = !search
             ChatEngine.search = search
+        }
+        Spacer(Modifier.weight(1f))
+        if (cachePercent != null) {
+            Text(
+                Lang.t("缓存 %s", "$cachePercent%"),
+                color = DlaColors.TextDim,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+            )
         }
     }
 }
@@ -1757,7 +2073,7 @@ private fun ConversationSettings() {
     var search by remember { mutableStateOf(ChatEngine.search) }
     var autoApprove by remember { mutableStateOf(ChatEngine.autoApprove) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SettingSwitch(Lang.t("深度思考（LLM 区）"), thinking) { thinking = it; ChatEngine.thinking = it }
+        SettingSwitch(Lang.t("深度思考（LLM / Agent 区）"), thinking) { thinking = it; ChatEngine.thinking = it }
         SettingSwitch(Lang.t("联网搜索（LLM 区）"), search) { search = it; ChatEngine.search = it }
         SettingSwitch(Lang.t("完全权限（Agent 不再逐次确认）"), autoApprove) {
             autoApprove = it
@@ -1778,7 +2094,10 @@ private fun ConversationSettings() {
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        TextButton(onClick = { ChatEngine.location = location }) {
+        TextButton(onClick = {
+            ChatEngine.location = location
+            Toast.makeText(context, Lang.t("已保存"), Toast.LENGTH_SHORT).show()
+        }) {
             Text(Lang.t("保存地区"), color = DlaColors.Mint)
         }
     }
@@ -2029,6 +2348,7 @@ private fun PersonaSettings() {
                 save()
                 hint = Lang.t("已保存角色设定")
                 error = null
+                Toast.makeText(context, Lang.t("已保存角色设定"), Toast.LENGTH_SHORT).show()
             }) { Text(Lang.t("保存设定"), color = DlaColors.Mint) }
             TextButton(
                 onClick = {
@@ -2354,8 +2674,9 @@ private fun Modifier.navigationBarsPaddingCompat(): Modifier =
 // ---------------- Agent 用量条 ----------------
 
 /**
- * Agent 区的状态条：左边是上下文占用（十段虚线，每段代表 10%），右边是本轮总耗时。
+ * Agent 区的状态条：上面一行是缓存命中率与本轮耗时，下面一行是上下文占用（十段虚线）。
  *
+ * - 缓存 / 本轮耗时单独一行、字号略大，不和上下文条挤在同一行；
  * - 百分比按 usage 里的 input + cache_creation + cache_read + output 计算，精确到 0.1%；
  * - 视觉上最低显示 1%，避免刚开始时看起来像没占用；没有用量数据时显示「—」；
  * - 耗时只显示这一轮（用户发出 → 这一轮结束），不跨轮累计。
@@ -2365,39 +2686,61 @@ private fun AgentUsageBar(
     usedTokens: Int,
     windowTokens: Int,
     turnMs: Long,
+    cachePercent: Int? = null,
 ) {
     val window = windowTokens.coerceAtLeast(1)
     val percent = if (usedTokens > 0) usedTokens * 100.0 / window else 0.0
     val shown = if (usedTokens > 0) maxOf(1.0, percent) else 0.0
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Text(Lang.t("上下文"), color = DlaColors.TextDim, fontSize = 10.sp)
-        Spacer(Modifier.width(6.dp))
-        ContextDashes(percent = shown, modifier = Modifier.width(96.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(
-            if (usedTokens > 0) String.format(Locale.US, "%.1f%%", shown) else "—",
-            color = DlaColors.Mint,
-            fontSize = 10.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            if (usedTokens > 0) formatTokens(usedTokens) + " / " + formatTokens(window) else "",
-            color = DlaColors.TextDim,
-            fontSize = 9.sp,
-            fontFamily = FontFamily.Monospace,
-        )
-        Spacer(Modifier.weight(1f))
-        if (turnMs > 0) {
+        if (cachePercent != null || turnMs > 0) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (cachePercent != null) {
+                    Text(
+                        Lang.t("缓存 %s", "$cachePercent%"),
+                        color = DlaColors.Warm,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                if (turnMs > 0) {
+                    Text(
+                        Lang.t("本轮 %s", formatElapsed(turnMs)),
+                        color = DlaColors.TextDim,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(Lang.t("上下文"), color = DlaColors.TextDim, fontSize = 10.sp)
+            Spacer(Modifier.width(6.dp))
+            ContextDashes(percent = shown, modifier = Modifier.width(96.dp))
+            Spacer(Modifier.width(6.dp))
             Text(
-                Lang.t("本轮 %s", formatElapsed(turnMs)),
-                color = DlaColors.TextDim,
+                if (usedTokens > 0) String.format(Locale.US, "%.1f%%", shown) else "—",
+                color = DlaColors.Mint,
                 fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (usedTokens > 0) formatTokens(usedTokens) + " / " + formatTokens(window) else "",
+                color = DlaColors.TextDim,
+                fontSize = 9.sp,
                 fontFamily = FontFamily.Monospace,
             )
         }
@@ -2519,6 +2862,22 @@ private fun SettingsScreen(
                 title = { Text(Lang.t("设置"), fontWeight = FontWeight.SemiBold, fontSize = 16.sp) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Text("←", color = DlaColors.Mint, fontSize = 19.sp) }
+                },
+                actions = {
+                    TextButton(onClick = {
+                        // 重新读一遍偏好：外部改过配置（或刚保存完想确认）时不用退出去重进
+                        key = ChatEngine.apiKey
+                        base = ChatEngine.baseUrl
+                        model = ChatEngine.model
+                        protocol = ChatEngine.protocol
+                        provider = ChatEngine.provider
+                        models = ChatEngine.cachedModels
+                        contextWindow = ChatEngine.contextWindow
+                        saved = false
+                        testResult = ""
+                        ChatEngine.refresh()
+                        Toast.makeText(context, Lang.t("已刷新"), Toast.LENGTH_SHORT).show()
+                    }) { Text(Lang.t("刷新"), color = DlaColors.Mint, fontSize = 13.sp) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = DlaColors.Background,
@@ -2654,12 +3013,20 @@ private fun SettingsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         ChatEngine.apiKey = key
-                        if (base.isNotBlank()) ChatEngine.baseUrl = base
+                        // 允许清空：空串 = 回到默认地址（以前留空会被忽略，用户以为没保存上）
+                        ChatEngine.baseUrl = base
                         if (model.isNotBlank()) ChatEngine.model = model
                         ChatEngine.protocol = protocol
                         ChatEngine.provider = provider
                         if (models.isNotEmpty()) ChatEngine.cachedModels = models
                         saved = true
+                        val noKey = ChatEngine.apiKey.isBlank()
+                        Toast.makeText(
+                            context,
+                            if (noKey) Lang.t("已保存，但还没填 API Key，暂时不能对话")
+                            else Lang.t("已保存，下一次请求生效"),
+                            if (noKey) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                        ).show()
                     }) { Text(Lang.t("保存"), color = DlaColors.Mint) }
                     TextButton(
                         onClick = {
@@ -2881,23 +3248,29 @@ private fun Modifier.androidClickableSimple(onClick: () -> Unit): Modifier =
     this.clickable(onClick = onClick)
 
 /** 把消息里的工具调用按轮次聚合，供迭代树展示 */
+/** 把消息里的思考/工具按轮聚合；老数据没有 round 时退回「按 1 轮 + 全部工具」，别把迭代树弄丢 */
 private fun buildRounds(blocks: List<Block>): List<IterationRound> {
+    val groups = collectRoundGroups(blocks)
+    if (groups.isNotEmpty()) return groups.map { group -> iterationRound(group) }
+    // 3.5.1 之前的会话没有 round：沿用旧版「一轮 + 全部工具」的展示
     val tools = blocks.filterIsInstance<Block.Tool>()
+    if (tools.isEmpty()) return emptyList()
     val thinking = blocks.filterIsInstance<Block.Thinking>()
         .joinToString("\n") { it.text }
         .trim()
-    val rounds = buildRoundsFromTools(tools)
-    if (rounds.isEmpty()) return rounds
-    return rounds.mapIndexed { index, round ->
-        if (index == 0 && thinking.isNotEmpty()) round.copy(thinking = thinking) else round
-    }
+        .ifEmpty { null }
+    return listOf(IterationRound(round = 1, tools = tools, thinking = thinking))
 }
 
-private fun buildRoundsFromTools(tools: List<Block.Tool>): List<IterationRound> {
-    if (tools.isEmpty()) return emptyList()
-    val grouped = tools.groupBy { it.round.coerceAtLeast(1) }.toSortedMap()
-    return grouped.map { (round, list) -> IterationRound(round = round, tools = list) }
-}
+/** 一轮的分组 → 迭代树里的一轮（思考 + 该轮工具），两边的轮数口径保持一致 */
+private fun iterationRound(group: RoundGroup): IterationRound = IterationRound(
+    round = group.round,
+    tools = group.blocks.filterIsInstance<Block.Tool>(),
+    thinking = group.blocks.filterIsInstance<Block.Thinking>()
+        .joinToString("\n") { it.text }
+        .trim()
+        .ifEmpty { null },
+)
 
 private fun timeAgo(millis: Long): String {
     if (millis <= 0L) return ""

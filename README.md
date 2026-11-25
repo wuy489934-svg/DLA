@@ -3,15 +3,15 @@
   <img src="docs/assets/icon-round-512.png" width="88" alt="DLA round icon" />
 </p>
 
-<h1 align="center">DLA · DeepSeek LLM Agent</h1>
+<h1 align="center">DLA · 本地智能体</h1>
 
 <p align="center">
-  装在自己 Android 手机上的<b>本地智能体</b>：<br/>
+  <b>DLA = DeepSeek LLM Agent</b>，一个装在自己 Android 手机上的本地智能体：<br/>
   一个有人设、会说话的 <b>LLM 伴侣</b>，和一个能读屏、能跑命令、能自己检查产物的<b>手机 Agent</b>，平级共处一个 APK。
 </p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img alt="version 3.5.0" src="https://img.shields.io/badge/version-3.5.0-7FE7C4" /></a>
+  <a href="CHANGELOG.md"><img alt="version 3.6.0" src="https://img.shields.io/badge/version-3.6.0-7FE7C4" /></a>
   <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-7FE7C4" /></a>
   <img alt="Android 10+ arm64" src="https://img.shields.io/badge/Android-10%2B%20arm64-7FE7C4" />
   <img alt="local-first, no telemetry" src="https://img.shields.io/badge/local--first-no%20telemetry-7FE7C4" />
@@ -19,31 +19,39 @@
 
 > **非官方声明**：DLA 不是 DeepSeek 官方产品，与深度求索公司没有隶属、授权或合作关系；“DeepSeek”仅用于说明协议兼容性。本项目不包含官方 Demo 的角色素材、官方品牌插画或任何未授权素材；图标、吉祥物与演示素材均为本项目原创或在真机上生成。
 
+> **先澄清一个常见误会：DLA 不使用 Termux。**
+>
+> 2.2（2026-11-23）已经把 Termux 集成**整体删除**——不是“可选项”，也不是“可选后端”。当前版本没有 `termux` 工具、没有 RUN_COMMAND、没有 Termux 设置面板，也不依赖 Termux 才能启动。APK 自带 Android toybox shell、CPython 3.12、Node 24 与 ripgrep；可选增强只有 **Shizuku**（`pm / am / settings` 等特权命令）和**无障碍服务**（读屏 / 点按）。
+> 仓库里 1.4.x / 2.x 的 CHANGELOG 提到 Termux，只是历史记录；**3.5.0 与 3.6.0 的更新都与 Termux 无关**。
+
 <a id="toc"></a>
 
 ## 目录
 
 - [这是什么](#what)
 - [两个平级的分区：LLM + Agent](#zones)
+- [Agent 运行时框架](#runtime)
+- [长任务：思考 → 调用 → 思考](#thinking)
+- [模型协议与端点](#protocols)
 - [LLM 区：有记忆、有人设的对话者](#llm)
 - [Agent 区：能动手、也会自检的手机 Agent](#agent)
 - [真机产物：Agent 自己做出来的东西](#outputs)
-- [3.5.0 更新：从 3.1.2 起](#whatsnew)
+- [3.6.0 更新](#whatsnew)
 - [它能做什么](#scenarios)
 - [安装与快速开始](#install)
 - [常见问题 FAQ](#faq)
 - [两个区共用的东西](#shared)
 - [版本沿革](#history)
-- [完全开源](#oss)
-- [架构与运行时路径](#runtime)
-- [构建 / 项目结构 / 许可](#build)
+- [完全、公开、透明的开源](#oss)
+- [架构、目录与构建](#build)
 - [搜索关键词](#keywords)
+- [English summary](#english)
 
 <a id="what"></a>
 
 ## 这是什么
 
-**DLA = DeepSeek LLM Agent**，一个跑在 Android 手机上的**本地优先**智能体客户端。它把两件通常被拆开的事放进同一个 App，并且**同等对待**：
+**DLA（DeepSeek LLM Agent）** 是一个**本地优先**的 Android 智能体客户端。它把两件通常被拆开的事放进同一个 App，并且**同等对待**：
 
 - **LLM 区**：一个可以自定义人设、有记忆、能朗读、能看图的 AI 对话者（AI 伴侣 / 角色扮演 / 长文助手）。
 - **Agent 区**：一个能调用工具的**手机 Agent**——读屏、点按、跑 shell / Python / Node、读写文件、联网抓取与搜索、查应用和系统信息，把任务真正做完，还能**自己截图检查自己做出来的网页**。
@@ -52,6 +60,7 @@
 
 | 项目 | 说明 |
 |---|---|
+| 名字 | **DLA**（DeepSeek LLM Agent）；搜索与引用请用 **DLA** |
 | 平台 | Android 10（API 29）及以上，**arm64-v8a** |
 | 体积 | 单个 APK 约 48 MB（安装后约 150 MB） |
 | 界面 | 原生 Jetpack Compose（无网页外壳） |
@@ -61,11 +70,17 @@
 | 可选增强 | Shizuku（uid 2000 特权命令）、无障碍服务（读屏 / 点按） |
 | 联网 | 模型请求 + 原生 `web_fetch` + `web_search`；界面、Markdown、KaTeX/mermaid 全离线 |
 | 数据 | 会话、人设、附件、`agent-runs` 记账全在本机；无中转服务器 |
-| 开源 | Apache-2.0，应用层代码全部在仓库 |
+| 开源 | Apache-2.0，应用层代码全部在仓库；发布版由本仓库源码构建 |
 
-![DLA 3.5.0 首页：LLM 与 Agent 两个分区](docs/assets/screenshot-home.png)
+![DLA 首页：LLM 与 Agent 两个分区](docs/assets/screenshot-home.png)
 
-<p align="center"><sub>3.5.0 首页：只保留两个分区入口。Agent 用主色薄荷绿，LLM 用暖色，会话各回各家。</sub></p>
+<p align="center"><sub>首页：只保留两个分区入口。Agent 用主色薄荷绿，LLM 用暖色，会话各回各家。</sub></p>
+
+### 为什么叫 DLA
+
+DLA 是 **DeepSeek LLM Agent** 的缩写，也是这个项目唯一的产品名和检索词。它不是某个官方 Demo 的重打包，也不是“DeepSeek 客户端”的泛称；LLM 代表它像个人，Agent 代表它能把事办成，两者是同一个产品的两张脸。
+
+在 GitHub、搜索引擎或 AI 工具里检索本项目，请用 **DLA**（可加“本地智能体”或“Android Agent”）；“DeepSeek 客户端”是很多项目的泛称，很容易搜错。
 
 <a id="zones"></a>
 
@@ -80,9 +95,182 @@ DLA 不是“聊天框旁边挂了个工具面板”，而是把**语言与人�
 
 两个区共用同一套模型接口、同一个 Key、同一份本机数据，但在会话层**完全隔离**：首页只做入口，进去才看到各自的历史；Agent 用薄荷绿、LLM 用暖色，扫一眼就知道自己在哪个区。**导航是真正的页面栈**：会话 → 设置 → 返回，回到的还是那个会话，草稿和消息都在。
 
-![DLA 3.5.0 演示](docs/assets/demo.gif)
+![DLA 演示](docs/assets/demo.gif)
 
-<p align="center"><sub>3.5.0 真机截图串成的演示：首页双分区 → Agent 执行与用量条 → 工具结果的 [工具 · 身份] → LLM 对话与朗读</sub></p>
+<p align="center"><sub>真机截图串成的演示：首页双分区 → Agent 执行与用量条 → 工具结果的 [工具 · 身份] → LLM 对话与朗读</sub></p>
+
+<a id="runtime"></a>
+
+## Agent 运行时框架
+
+DLA 的 Agent 不是一个黑盒接口，而是一个跑在独立进程里的原生循环。下面这条链路里的每一环都在本仓库里，可以逐行核对。
+
+### 一次任务的完整链路
+
+```text
+ChatEngine.kt              原生界面组装 payload（sessionId / model / protocol / provider /
+        │                  system / messages / maxRounds=120 / 计划与笔记）
+        ▼
+AgentClient.java           UI 进程门面：bindService + Messenger，断线后按 cursor 回放
+        ▼
+AgentService.java          跑在 :agent 进程：specialUse 前台服务 + 通知栏停止 + 保活
+        ▼
+AgentRuntime.java          单实例状态机：事件缓冲、checkpoint、结果通知、停止
+        ▼
+AgentRunner.java           原生 Agent 循环
+   ├─ connectTools()       核心手机工具 / phone_sh / 运行时候选 / 联网 / 任务记忆
+   ├─ ProviderCompat       供应商适配（预设 / 自动识别 / 各家 compat）
+   ├─ OpenAiWire           Anthropic block → OpenAI Chat Completions 映射
+   ├─ streamRound()        按协议 POST 端点，SSE 解析正文、思考、tool_use、usage
+   ├─ executeTool()        RuntimeTools ▸ LocalTools ▸ McpClient ▸ WebTools ▸ TaskTools
+   ├─ AgentRunJournal      files/agent-runs/<requestId>.json（700ms 节流，界面重启认领）
+   └─ emit()               tool_start / tool_result / status / task_state / usage / done
+        ▼
+工具后端
+   LocalTools + ChatDemoAccessibilityService   无障碍读屏、点击、应用/文件/设置/截图
+   ShizukuShell                                 Shizuku（uid 2000）执行特权命令
+   NativeShell / PythonTool / NodeTool          内置 shell / CPython / Node（应用身份）
+   ProcessRunner / RuntimeEnv                   进程树 killer、PATH 与软链
+   WebTools / WebShot                           原生抓取与搜索、离屏网页截图
+```
+
+### 进程模型
+
+| 设计 | 为什么 |
+|---|---|
+| UI 在**主进程**，Agent 在 **`:agent` 进程** | 界面崩溃、被系统回收、旋转重建都不会带走正在跑的任务 |
+| `AgentService` 是 `specialUse` 前台服务 | 长任务在前台服务里继续跑，通知栏提供硬停止 |
+| 事件跨进程用 `Messenger`，绑定断开后 `attach(requestId, cursor)` 回放 | 重开界面能接上错过的增量，而不是重跑 |
+| 运行账本 `files/agent-runs/<requestId>.json` | 界面进程被杀期间跑完的回答，下次启动仍能认领；`runId` 去重，不会写两条 |
+| `AgentCheckpoint`（Android Keystore 加密） | 进程被杀后可以从计划与进度继续 |
+
+### 工具注入：核心 + 按需发现
+
+初始上下文只放最常用的一组，避免几十个 schema 把窗口撑爆：
+
+1. **核心 13 个**：`phone_screen`、`phone_tap_text`、`phone_wait`、`phone_tap`、`phone_swipe`、`phone_input`、`phone_key`、`phone_screenshot`、`phone_view_image`、`phone_open`、`phone_apps`、`phone_device`、`phone_sh`。
+2. **`phone_shell`**：Shizuku 就绪时直接进核心（第 14 个），不用先 `tool_search`。
+3. **联网 2 个**：`web_search`、`web_fetch` 始终注入。
+4. **`tool_search`**：文件读写 / 替换、JSON、zip、docx、设置、剪贴板、通知、`phone_py`、`phone_js`、`phone_web_shot` 等命中后，下一轮才进入工具列表。
+5. **MCP 工具**：按已连接的 Server 注入；按可用性裁剪（没有 Shizuku 就不注入特权工具，没有无障碍就不注入读屏工具）。
+
+### 三种执行身份与证据规则
+
+| 身份 | 工具 | 能做 | 不能做 |
+|---|---|---|---|
+| 应用身份（untrusted_app） | `phone_sh` / `phone_py` / `phone_js` | 读自身目录与 `/sdcard`、grep/find/awk/sed、getprop、node/python | `pm` / `am` / `settings` / `dumpsys`；`/proc` 全局、`/data/app`、别家应用私有目录 |
+| Shizuku（uid 2000） | `phone_shell` | `pm` / `am` / `settings` / `dumpsys` / 全系统 `ps` | 需要 root 的操作 |
+| 无障碍 | `phone_screen` / `phone_screenshot` / `phone_tap*` / `phone_swipe` / `phone_input` / `phone_key` | 读屏、截图、点按、输入 | 不提供系统信息 |
+
+每条工具结果都带 `[工具 · 身份]` 来源标签（如 `[phone_sh · 应用身份]`、`[phone_shell · Shizuku uid 2000]`）；调用指南禁止把一种身份的结论记到另一种身份头上，禁止用应用身份看不到的 `ps` / `/proc/net` 当负证据，没实测的能力必须标“未验证”。
+
+### 长任务可靠性
+
+| 场景 | 机制 |
+|---|---|
+| 工具参数被 `max_tokens` 截断 | 标记为截断、不执行，返回可恢复提示教模型分段写（`phone_write` + `phone_append`，每段 ≤3000 字符），本轮继续 |
+| 回复撞到输出上限 | 把已生成部分接上，追加“从中断处继续”，最多 3 次 |
+| 长任务思考失控 | 思考预算 + 客户端看门狗：只让**这一轮**直接执行，下一轮恢复思考；详见下一节 |
+| 界面进程被杀 | `:agent` 继续跑，账本 + `runId` 让回答在重开界面后认领 |
+| 停止 | 命令在 `setsid` 下启动并记录 pid，按进程组 / 会话结束整棵子进程树 |
+| 重复调用 | 连续 5 次完全相同调用会被拦截；第 3 次先提醒 |
+| 轮数 | 单次运行上限 120 轮；连续单工具轮会收到批量提示 |
+
+<a id="thinking"></a>
+
+## 长任务：思考 → 调用 → 思考
+
+3.6.0 的核心修复。长任务里模型需要**在每一轮都能思考**，但不能把输出预算全烧在思考上、也不能因为一次想太久就永久关掉思考。
+
+| 问题 | 3.6.0 的做法 |
+|---|---|
+| 思考一超限，整个任务都不再思考 | 降档只作用于**当前这一轮的重试**；每轮开始自动恢复思考 |
+| 被截断的思考直接丢弃 | 取思考尾巴（≤600 字）接进重试提示：“接上它继续，不要整段复述”，不从头再想 |
+| 连续想过头，越烧越多 | 本轮预算按 **12K → 6K → 3K 字符**收紧，成功执行一轮立刻回到 12K |
+| 重试消耗轮数 | 同一轮内层重试，**不消耗轮数**；状态提示带“第 N 轮” |
+| 输出全是思考、一个正文都没有 | 同样走“本轮关思考重来、下一轮恢复”，不把空 assistant 塞进历史 |
+
+### 为什么必须回传 thinking 块
+
+Anthropic Messages 协议（以及 DeepSeek 的 `/anthropic/v1`）有一个硬要求：**开启思考时，历史里由“思考 + 工具调用”产生的 assistant 消息必须原样带回 thinking 块（含 signature）**，否则下一轮直接 400：
+
+```text
+The content[].thinking in the thinking mode must be passed back to the API.
+```
+
+DLA 的处理：
+
+- 流式解析时累积思考正文与 `signature`（`content_block_start` / `signature_delta`）；
+- `assistantMessage()` 在 content 最前面回传 `{"type":"thinking","thinking":…,"signature":…}`；
+- 被看门狗截断、重试时思考是关的，就把中止前的思考补回该条 assistant 消息，保证下一轮不 400；
+- OpenAI 方言不回传 reasoning（兼容层不接受）。
+
+这是 3.6.0 在真机上实测撞到并修掉的问题：思考常在之后，这个坑必现；修完后 9 轮 / 13 轮长任务都能连续跑完。
+
+### 界面上看得见的“过程”
+
+- **执行过程大卡**：所有“第 N 轮”的思考与工具收进**一张**可折叠卡片，放在迭代树下方；运行中默认展开，任务结束自动折叠。
+- **迭代树**：轮数 / 步数 / 真实耗时；点某一轮定位到执行过程。
+- **上下文与缓存**：状态条第一行是缓存命中率与本轮耗时（整个对话口径），第二行才是上下文十段虚线。
+- **工具卡**：参数、结果、执行身份、耗时；失败是红色状态点。
+
+![运行中的执行过程大卡：每一轮都有思考与工具](docs/assets/screenshot-process-running.png)
+
+<p align="center"><sub>3.6.0 真机：任务运行中，所有轮收进一张「执行过程」大卡，每一轮都能看到思考卡与这一轮的工具。</sub></p>
+
+
+<a id="protocols"></a>
+
+## 模型协议与端点
+
+DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Key` + `模型` + `供应商`。换一家模型不需要改 App，也不需要在代码里 fork 一套 loop。
+
+### 两种方言
+
+| 协议 | 请求 | 认证 | 典型端点 |
+|---|---|---|---|
+| **Anthropic Messages** | `POST {base}/messages` | `x-api-key` + `anthropic-version: 2023-06-01` | DeepSeek `https://api.deepseek.com/anthropic/v1`、Claude `https://api.anthropic.com/v1` |
+| **OpenAI Chat Completions** | `POST {base}/chat/completions` | `Authorization: Bearer` | DeepSeek `https://api.deepseek.com/v1`、OpenAI `https://api.openai.com/v1`、千问 / Kimi / GLM / OpenRouter / 硅基流动 / Groq / Ollama |
+
+内部消息始终是 Anthropic block 造型（`text` / `image` / `tool_use` / `tool_result`）；发请求前由 `OpenAiWire` 降级映射：system → `role:system`、`tool_use` → `tool_calls`、`tool_result` → 独立的 `role:tool` 消息、图片 → `image_url`、工具 schema → `{type:function, function:{…}}`。流式侧解析 `choices[0].delta` 的 `content` / `reasoning_content` / `tool_calls`，并把 `finish_reason` 映射回内部 stop reason。
+
+### 12 个供应商预设
+
+设置页一键填好协议 + Base URL + 默认模型，并附一句“这家的坑”：
+
+| 供应商 | 协议 | Base URL | 默认模型 |
+|---|---|---|---|
+| DeepSeek（Anthropic） | anthropic | `https://api.deepseek.com/anthropic/v1` | `deepseek-flash` |
+| DeepSeek（OpenAI） | openai | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 通义千问 / 百炼 | openai | `https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1` | `qwen-plus` |
+| 月之暗面 Kimi | openai | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` |
+| 智谱 GLM | openai | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
+| OpenAI | openai | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| Anthropic Claude | anthropic | `https://api.anthropic.com/v1` | `claude-sonnet-4-5` |
+| OpenRouter | openai | `https://openrouter.ai/api/v1` | `anthropic/claude-sonnet-4.5` |
+| 硅基流动 | openai | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-8B` |
+| Groq | openai | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` |
+| Ollama（本机） | openai | `http://localhost:11434/v1` | `qwen3` |
+| 自定义 / 中转站 | 任选 | 服务商给的地址 | 从拉取结果里挑 |
+
+### `ProviderCompat`：差异收敛在一张表
+
+`ProviderCompat` 是纯逻辑，设置页与 `:agent` 的循环共用同一份，避免“UI 说支持、请求里却发不出去”。
+
+| 维度 | 处理 |
+|---|---|
+| 供应商识别 | 先 Base URL（deepseek / openai / anthropic / dashscope·qianwen·bailian / moonshot / bigmodel·zhipu / openrouter / siliconflow / groq / localhost·11434），再模型名前缀，最后按协议兜底 |
+| 输出上限字段 | o1/o3/o4/gpt-5 → `max_completion_tokens`，其余 `max_tokens` |
+| 温度 | o 系列 / gpt-5 不发 `temperature`（传了会 400） |
+| `stream_options` | 只有 DeepSeek / OpenAI 端点带 `include_usage` |
+| 思考开关 | Anthropic → `thinking:{type}`；千问 → `enable_thinking`；GLM/Kimi/DeepSeek（OpenAI 方言）→ `thinking:{type:enabled}`；OpenAI o 系列 → `reasoning_effort`；其余不发 |
+| 服务端工具 | `deepseek_web_search` / `deepseek_read_url` 只在 DeepSeek 端点下发 |
+| 身份文案 | 非 DeepSeek 端点用中性身份，不对着千问说自己是 DeepSeek |
+| 端点纠错 | 切协议时自动 `/anthropic/v1` ↔ `/v1` 互换；`…/messages`、`…/chat/completions` 会自动去重；Base URL 只接受 `http(s)` 开头 |
+
+### 拉取模型后直接挑
+
+「拉取并测试连接」成功后，设置页会显示“从 N 个模型里挑一个”，带搜索框；模型输入框旁也有「选择」，缓存过列表就不必每次重拉。401/403 会直接停，不会无意义重试。
 
 <a id="llm"></a>
 
@@ -95,7 +283,8 @@ DLA 不是“聊天框旁边挂了个工具面板”，而是把**语言与人�
 - **会说话（TTS 朗读）**：每条回复下「🔊 朗读」，也可自动朗读。引擎二选一——本机系统语音（零配置、离线），或 **Qwen3-TTS**（阿里云百炼，音色 Cherry / Serena / Ethan / Chelsie 或自定义，北京 / 新加坡两个区域，600 字/段、最多 5 段连续播放）。朗读**默认关闭**。
 - **深度思考 / 联网搜索**：对话页顶部一键切换；两个开关的状态在会话里一眼可见。
 - **长会话与附件**：图片、PDF、docx、文本都能发；草稿自动保留；长按复制或只选一段；回答下方有一键复制与朗读。
-- **换模型不用改 App**：拉取模型列表后直接**从列表里挑**（带搜索框），协议、Base URL、模型都在设置页一处改完。
+- **换模型不用改 App**：协议、Base URL、模型都在设置页一处改完；拉取后可从列表里挑。
+- **编辑最后一条用户消息并重答**：只改最后一条用户消息，旧回答会一起删掉，历史里不会残留改之前的版本。
 
 ![LLM 区](docs/assets/screenshot-llm.png)
 
@@ -110,16 +299,16 @@ DLA 不是“聊天框旁边挂了个工具面板”，而是把**语言与人�
 ## Agent 区：能动手、也会自检的手机 Agent
 
 - **运行时全部内置**：APK 里带 Android 自带的 shell（toybox）、CPython 3.12（Chaquopy）、Node 24 和 ripgrep，**不需要 Termux、不需要 root**，装完就能执行。命令以应用身份运行；需要 `pm / am / settings / dumpsys` 这类特权命令时才用 Shizuku。
-- **工具按需发现**：初始只注入 **13 个核心工具**（读屏、点按、滑动、输入、按键、截图、读图 `phone_view_image`、应用、设备信息、本机终端 `phone_sh`）；Shizuku 就绪时再直接注入 `phone_shell`（14 个），不必先搜索。Python、Node、文件读写、设置、剪贴板、通知、zip、docx、网页截图等先 `tool_search`，命中后下一轮才进入工具列表——上下文不被几十个 schema 撑爆。
-- **看得见的执行过程**：工具调用、耗时、缓存、并行组、**迭代树**、审批卡全部可见；工具卡展开后能看到参数、结果和**执行身份**，每条工具结果都带 `[工具 · 身份]` 标签（如 `[phone_sh · 应用身份]`、`[phone_shell · Shizuku uid 2000]`）。
+- **工具按需发现**：初始只注入 **13 个核心工具**（读屏、点按、滑动、输入、按键、截图、读图 `phone_view_image`、应用、设备信息、本机终端 `phone_sh`）；Shizuku 就绪时再直接注入 `phone_shell`（14 个）。Python、Node、文件读写、设置、剪贴板、通知、zip、docx、网页截图等先 `tool_search`，命中后下一轮才进入工具列表。
+- **看得见的执行过程**：工具调用、耗时、缓存、并行组、**迭代树**、**执行过程大卡**、审批卡全部可见；工具卡展开后能看到参数、结果和**执行身份**，每条工具结果都带 `[工具 · 身份]` 标签。
 - **上下文用量条 + 单轮耗时**：十段虚线（每段 10%，最低 1%、精确到 0.1%），本轮计时只记这一轮；窗口可选 64K / 128K / 256K / 1M。
-- **轮数预算**：单轮上限 **120** 次模型往返；调用指南教模型把互不依赖的只读检查合并（一条命令多条语句、同一轮多个工具调用），连续单工具轮还会收到批量提示。
+- **轮数预算**：单次运行上限 **120** 次模型往返；调用指南教模型把互不依赖的只读检查合并（一条命令多条语句、同一轮多个工具调用），连续单工具轮还会收到批量提示。
 - **三种执行身份，结论可核对**：应用身份 / Shizuku（uid 2000）/ 无障碍，各自能做什么写在调用指南里；不拿 `ps`、端口探测这类负证据下结论，没实测就标“未验证”。
-- **不会白跑**：大段参数被输出上限截断时变成**可恢复错误**并教模型分段写，而不是整轮报错；长思考 / 长文撞到输出上限会**自动续写**（最多 3 次）；界面进程被杀，回答也不会丢——`:agent` 把运行记到 `files/agent-runs`，界面重启后自动认领。
-- **会自检网页**：`phone_web_shot` 在 DLA 自己的窗口里**离屏渲染**本地 HTML 并截图，模型能看着图改布局，不打开浏览器、不抢前台（要求 DLA 在前台；文件存 `/sdcard/Download/DLA-web-shots/`）。
-- **联网取证**：`web_fetch` 是**原生抓取**（任何供应商都能用，桌面 UA、跟随重定向、正文转文本）；`web_search` 在 DeepSeek 端点走官方搜索，其它供应商走免费后端（中文：百度 → Bing → Bing RSS → DuckDuckGo；英文：Bing → 百度 → Bing RSS → DuckDuckGo），失败会带诊断，而不是一句“联网坏了”。
-- **停止是真的停**：命令在 `setsid` 下启动并记录 pid，点停止会按进程组 + 会话结束整棵子进程树，不留后台脚本。
-- **独立进程 + 提醒**：Agent 跑在 `:agent` 进程，界面崩溃或重建都不会带走任务；完成 / 失败 / 停止会发系统通知（带轮 / 步 / 耗时 / 最后工具，点一下回到会话），前台还会播一段 0.35 秒的上行双音。
+- **不会白跑**：大段参数被输出上限截断时变成**可恢复错误**并教模型分段写；长思考 / 长文撞到输出上限会**自动续写**；界面进程被杀，回答也不会丢。
+- **会自检网页**：`phone_web_shot` 在 DLA 自己的窗口里**离屏渲染**本地 HTML 并截图，模型能看着图改布局，不打开浏览器、不抢前台。
+- **联网取证**：`web_fetch` 是**原生抓取**；`web_search` 在 DeepSeek 端点走官方搜索，其它供应商走免费后端，失败会带诊断。
+- **停止是真的停**：命令在 `setsid` 下启动并记录 pid，点停止会按进程组 + 会话结束整棵子进程树。
+- **独立进程 + 提醒**：Agent 跑在 `:agent` 进程；完成 / 失败 / 停止会发系统通知，前台还会播一段 0.35 秒的上行双音。
 
 ![Agent 区：上下文用量条、本轮耗时、迭代树与工具身份](docs/assets/screenshot-agent.png)
 
@@ -151,48 +340,38 @@ DLA 不是“聊天框旁边挂了个工具面板”，而是把**语言与人�
 
 <p align="center"><sub>`mountain-sunset.svg` 的真实渲染（1600×1000）。源文件：<a href="docs/samples/mountain-sunset.svg"><code>docs/samples/mountain-sunset.svg</code></a>（2,692 B）</sub></p>
 
-> 这两件产物也解释了 3.5.0 为什么要做 `phone_web_shot`：模型能写网页不稀奇，**能看见自己写出来的网页并据此修改**才是闭环。上面两个源文件都可以直接在浏览器里打开验证。
-
 <a id="whatsnew"></a>
 
-## 3.5.0 更新：从 3.1.2 起
+## 3.6.0 更新
 
-GitHub 上一次发布是 **v3.1.2**。从 3.1.2 到 3.5.0，中间做过 3.1.2fix / 3.1.3 / 3.1.4 / 3.1.6 / 3.1.6fix / 3.5.0-rc.1 / rc.2 / rc.3，**全部合入这一版**。按主题看，是五件事：
+3.6.0 在 3.5.0 的基础上，把“长任务能不能持续思考”做完，并把执行过程收成一张卡：
 
-### 1）换模型不再被协议卡住
+### 1）思考 → 调用 → 思考
 
-- **两种方言**：`Anthropic Messages`（默认，DeepSeek 的 `/anthropic/v1`、Claude）与 `OpenAI Chat Completions`（`/v1/chat/completions`：GPT、千问、GLM、Kimi、OpenRouter、vLLM、Ollama…）。内部消息结构不变，发请求前由 `OpenAiWire` 做映射：system 转 `role:system`、`tool_use` 转 `tool_calls`、`tool_result` 转独立的 `role:tool` 消息、图片转 `image_url`、工具 schema 转 `{type:function,…}`。
-- **`ProviderCompat` 适配器**：12 个供应商预设一键填协议 + Base URL + 默认模型，并附一句“这家的坑”；再按 Base URL 与模型名**自动识别**供应商（deepseek / openai / anthropic / dashscope·qianwen·bailian / moonshot / bigmodel·zhipu / openrouter / siliconflow / groq / localhost·11434）。按家开关：`max_tokens` vs `max_completion_tokens`、o 系列不传 `temperature`、`stream_options.include_usage` 只给 DeepSeek/OpenAI、思考开关分 `thinking` / `enable_thinking` / `reasoning_effort`、服务端搜索工具只给 DeepSeek、非 DeepSeek 端点用中性身份文案。
-- **拉取模型后直接挑**：`拉取并测试连接` 成功后出现「从 N 个模型里挑一个」，带搜索框；模型输入框旁也有「选择」，不用每次重拉。
-- **端点纠错**：切协议时自动把 `/anthropic/v1` ↔ `/v1` 互换，粘了 `…/messages`、`…/chat/completions` 也会去掉；Base URL 只有 `http(s)` 开头才保存。
+- 看门狗触发时**只让这一轮直接执行**，下一轮自动恢复思考，不再把整个任务的思考永久关掉。
+- 被截断的思考取尾巴接回重试提示，不从头再想。
+- 连续想过头时本轮预算 12K → 6K → 3K 收紧，成功执行一轮立刻恢复。
+- 同一轮重试不消耗轮数；`max_tokens` 只烧出思考时也走同样的恢复路径。
+- **修掉 DeepSeek / Anthropic 的 thinking 回传要求**：assistant 消息带回 thinking 块（含 signature），截断重试时补回中止前的思考，否则下一轮 400。
 
-### 2）联网工具真的能用
+### 2）执行过程大卡
 
-- 上一版 `web_search` / `web_fetch` 写死 DeepSeek 专属接口，换到任何其它供应商都 400。现在 **`web_fetch` 改成原生抓取**：桌面 UA、跟随最多 4 跳重定向、按 Content-Type / `<meta charset>` 解码、去脚本样式、压空白，拒绝内网地址，正文上限 24K 字。
-- **`web_search` 按供应商分流**：DeepSeek 端点仍走官方搜索（失败自动降级），其它供应商走免费 HTML 后端，并针对中文/英文用不同顺序；Bing 结果页改版后**新老两套版式都认**，另加 Bing RSS 与百度解析器。
-- **失败带诊断**：返回“200 但没解析到结果（64KB，text/html，含 b_algo，开头：…）”这类信息，一眼能分清是没拿到页面还是版式又变了；调用指南明确要求**不许因为一次搜索失败就说“联网坏了”**。若真的搜不到，按「web_fetch 直接开 `https://cn.bing.com/search?q=…` 读结果页 → 换关键词 / 加 site: → 请用户给网址」处理。
+- 所有“第 N 轮”的思考与工具收进一张可折叠大卡，放在迭代树下方。
+- 运行中默认展开，任务结束自动折叠；点标题随时展开/收起。
+- 迭代树与执行过程轮数口径统一：有思考没工具的轮也算一轮。
 
-### 3）不会白跑，也不会白等
+### 3）状态条重排
 
-- **大参数截断自愈**：模型写大文件时工具参数可能被 `max_tokens` 截断，旧代码会直接抛异常、整轮结束。现在截断变成一条可恢复的错误，教模型用 `phone_write` 写第一段、`phone_append` 逐段追加（每段 ≤3000 字符），本轮继续。
-- **长输出自动续写**：思考很长或正文很长、撞到输出上限且没有工具调用时，会自动把已生成部分接上、追加“从中断处继续”，最多 3 次，不再把“字数到顶”当成任务结束。
-- **退出重进回到上次会话**：杀掉应用再打开，直接回到上次那个会话（`chat:<id>` / `zone:<mode>` 存盘）。
-- **界面进程被杀，回答不丢**：`:agent` 把每轮事件记账到 `files/agent-runs/<requestId>.json`（700ms 节流），界面重启后 `recoverRuns()` 认领：跑完的直接补成消息，还在跑的重新挂成流式草稿；助手消息带 `runId`，实时事件与日志认领同时发生也只落一条。
-- **页面栈**：会话 → 设置 → 返回回到会话；进设置不再顺手把会话关掉。
+- 缓存命中率与本轮耗时单独一行（12sp），放在上下文占用上方，不再和十段虚线挤一行。
 
-### 4）结论必须能对回「身份 + 证据」
+![3.6.0 真机：任务结束后的执行过程大卡与状态条](docs/assets/screenshot-process.png)
 
-- **每条工具结果带 `[工具 · 身份]` 标签**：`[phone_sh · 应用身份]`、`[phone_shell · Shizuku uid 2000]`、`[phone_screen · 无障碍]`……模型的结论必须以标签归因。
-- **`phone_shell` 进核心工具**：Shizuku 就绪时直接出现在工具列表里，不用先 `tool_search`，“运行时报告可用”就真的可用。
-- **调用指南纠偏**：应用身份下 `pm` / `am` / `settings` / `dumpsys` 会被拒、`ps` 只看得到自己、`/proc/net/tcp` 读不到；没有 `curl` / `wget`，联网用 `node -e fetch` 或 Python `urllib`；`python3` 不是 shell 命令。
-- **思考卡流式不再合拢**：以前用正文当 `remember` key，流式每个 token 都重置展开状态；现在展开状态跟着组合位置保留。
+<p align="center"><sub>3.6.0 真机：19 轮任务结束后「执行过程」自动折叠；状态条第一行是缓存 80% 与本轮 2m31s，第二行才是上下文占用。</sub></p>
 
-### 5）手感、提醒与可见性
 
-- **破碎方块点击特效**：7 块、2.5–7dp、最远 20dp 光环、430ms，只旁听指针事件、不抢点击；没有爆点时不跑帧循环。
-- **音效搬出主线程**：点击 / 发送 / 完成 / 失败四声，独立 `HandlerThread`，启动时预热，主线程只投递一条消息——点击不再卡一下。
-- **任务通知**：完成 / 失败 / 停止都会发通知，正文含结论预览与轮 / 步 / 耗时 / 最后工具，点一下回到那个会话；渠道 `agent-result-v2`（`IMPORTANCE_HIGH` + 提示音 + 振动）。任务结束会撤掉前台服务通知，不再常驻“正在执行任务”。
-- **前台完成音**：0.35 秒上行双音（880 → 1318Hz，走媒体音量），前台任务跑完也听得见；失败是下行双音。
+### 3.5.0 打下的底子
+
+3.5.0 是上一次公开发布：双协议 + `ProviderCompat`（12 预设 / 自动识别 / 各家 compat）、拉取后挑模型、原生 `web_fetch` + 免费搜索链、`agent-runs` 记账与重启认领、参数截断自愈、长输出自动续写、`phone_web_shot` 离屏自检、`[工具 · 身份]` 标签、真页面栈、破碎动效 + 独立线程音效、任务通知 `agent-result-v2`、前台完成音。3.6.0 没有推翻这些，只是把长任务思考与执行过程可见性补齐。
 
 ![通知与朗读设置](docs/assets/screenshot-notify.png)
 
@@ -221,7 +400,7 @@ GitHub 上一次发布是 **v3.1.2**。从 3.1.2 到 3.5.0，中间做过 3.1.2f
 2. 手机允许「安装未知来源应用」（MIUI：设置 → 应用设置 → 授权管理 → 安装未知应用）。
 3. 点击 APK 安装；或数据线执行 `adb install -r DLA.apk`。
 4. 打开 DLA → 设置 → 模型接口 → 填入你自己的 API Key → 选择**接口协议**（Anthropic / OpenAI）→ 保存；需要的话点「拉取并测试连接」，成功后可以直接从模型列表里挑。
-5. **可选增强**：安装并启动 Shizuku，在 DLA 设置 → 更多 → 手机能力里授权，就能用 `pm / am / settings` 这类特权命令；无障碍服务可另行开启以启用读屏 / 点按。**不装任何东西也能用**：shell、Python、Node、ripgrep 都在 APK 里。
+5. **可选增强**：安装并启动 Shizuku，在 DLA 设置 → 更多 → 手机能力里授权，就能用 `pm / am / settings` 这类特权命令；无障碍服务可另行开启以启用读屏 / 点按。**不装任何东西也能用**：shell、Python、Node、ripgrep 都在 APK 里。**不需要安装 Termux。**
 6. **通知**：Android 13+ 首次启动会请求通知权限；之后可以在设置 → 通知里开关「任务通知」，并查看权限状态。
 7. **升级不要卸载**：同包名、同签名，直接覆盖安装即可保留数据；升级前建议在「数据管理」里导出历史。覆盖安装后如果无障碍被系统清掉，用「设置 → 更多 → 手机能力 → 打开无障碍设置」重新打开。
 
@@ -233,7 +412,7 @@ GitHub 上一次发布是 **v3.1.2**。从 3.1.2 到 3.5.0，中间做过 3.1.2f
 不需要。内置运行时以应用身份执行；只有 `pm / am / settings / dumpsys` 这类特权命令需要可选安装的 Shizuku（uid 2000）。
 
 **Q：需要装 Termux 吗？**
-不需要。APK 自带 Android toybox shell、CPython 3.12、Node 24 和 ripgrep，装完就能跑命令和脚本。
+不需要，而且**当前版本根本不支持 Termux**。Termux 集成已在 2.2 整体删除（不是“可选后端”）：没有 `termux` 工具、没有 RUN_COMMAND、没有 Termux 面板。APK 自带 Android toybox shell、CPython 3.12、Node 24 和 ripgrep，装完就能跑命令和脚本。
 
 **Q：能离线用吗？**
 界面、Markdown、公式 / 流程图渲染、内置运行时、系统语音朗读都可以离线；模型对话、`web_fetch` 与 `web_search` 需要网络，请求直达你自己填写的端点（搜索会走所选后端）。
@@ -256,6 +435,9 @@ Android 10（API 29）及以上、arm64-v8a 的真机；APK 约 48 MB，安装�
 **Q：界面被系统杀了，任务还在跑吗？**
 在。Agent 跑在 `:agent` 进程，并把运行记到 `files/agent-runs`；重新打开 DLA 会把跑完的回答补回会话。
 
+**Q：思考很久还是没动作怎么办？**
+DLA 会根据本轮思考长度自适应：超过预算就中止这一轮、关思考重来，下一轮再恢复思考；被截断的思考尾巴会接回提示。界面上会显示“第 N 轮思考过长，本轮改为直接执行（下一轮恢复思考）”。
+
 **Q：和别的“手机 Agent”有什么不同？**
 两个平级的分区：LLM 人设对话不是附属功能，Agent 也不是只会聊天的机器人；再加上本地优先、可审计的调用身份与证据标签、能自己截图检查产物，以及 Apache-2.0 全量开源。
 
@@ -263,10 +445,10 @@ Android 10（API 29）及以上、arm64-v8a 的真机；APK 约 48 MB，安装�
 
 ## 两个区共用的东西
 
-- **原生界面**：首页双分区、聊天、会话、设置、迭代树、通知都是 Compose 原生实现；Markdown、表格、代码块原生排版，公式（KaTeX）与流程图（mermaid）交给内置离线渲染器，不用联网加载 CDN。
+- **原生界面**：首页双分区、聊天、会话、设置、迭代树、执行过程大卡、通知都是 Compose 原生实现；Markdown、表格、代码块原生排版，公式（KaTeX）与流程图（mermaid）交给内置离线渲染器，不用联网加载 CDN。
 - **页面栈导航**：会话 → 设置 → 返回回到会话；页面栈用 `listSaver` 存盘，进程重建也不丢。
 - **会话与草稿**：新建会话不写盘，输入框草稿会保留并在列表标「草稿」；长按消息可复制全部或只选一段，回答下方有一键复制与朗读。
-- **附件**：图片、PDF（逐页渲染）、docx、纯文本 / 代码都能作为附件；📂 直接打开应用内文件浏览器（默认落在图片目录，可在当前目录搜索、多选，Agent 区还能整文件夹导入），不需要系统「安全访问」界面。
+- **附件**：图片、PDF（逐页渲染）、docx、纯文本 / 代码都能作为附件；📂 直接打开应用内文件浏览器（默认落在图片目录，可在当前目录搜索、多选，Agent 区还能整文件夹导入）。
 - **设置页卡片**：模型接口 / 外观 / 对话 / 通知 / 朗读 / 角色设定 / 更多，每个区块一张卡片，左侧强调条 + 标题 + 说明。
 - **主题与语言**：深色 / 浅色 / 跟随系统；界面与回复支持中英双语；界面音效可关。
 - **数据不出手机**：对话、附件、会话、设置和诊断全部留在本机。
@@ -283,98 +465,54 @@ Android 10（API 29）及以上、arm64-v8a 的真机；APK 约 48 MB，安装�
 
 | 版本 | 发布 | 主要内容 |
 |---|---|---|
-| **v3.5.0** | 2026-11-24 | 双协议 + `ProviderCompat`（12 预设 / 自动识别 / 各家 compat）、拉取后挑模型、`agent-runs` 记账与重启认领、参数截断自愈、长输出自动续写、`phone_web_shot` 离屏自检、原生 `web_fetch` + 免费搜索链、`[工具 · 身份]` 标签、破碎动效 + 独立线程音效、任务通知 `agent-result-v2`、前台完成音、真页面栈 |
+| **v3.6.0** | 2026-11-25 | 长任务“思考 → 调用 → 思考”（只降本轮 / 思考尾巴续接 / 预算自适应）、thinking 块回传修复、执行过程大卡、状态条重排 |
+| v3.5.0 | 2026-11-24 | 双协议 + `ProviderCompat`（12 预设 / 自动识别 / 各家 compat）、拉取后挑模型、`agent-runs` 记账与重启认领、参数截断自愈、长输出自动续写、`phone_web_shot` 离屏自检、原生 `web_fetch` + 免费搜索链、`[工具 · 身份]` 标签、破碎动效 + 独立线程音效、任务通知、前台完成音、真页面栈 |
 | v3.1.2 | 2026-11-24 | Agent 调用指南（身份 / 证据 / 先测再断言）、运行时能力注入、上下文用量条、单轮耗时、双分区首页、120 轮上限 |
 | v3.0 | 2026-11-23 | 设置页卡片化、朗读只对接 Qwen3-TTS、朗读默认关闭 |
 | v2.1 | 2026-11-23 | 长按复制、草稿、带上下文的「继续」、工具耗时、`phone_view_image` 读图与预览 |
 | v2.0 | 2026-11-23 | 原生 Compose 界面、独立 `:agent` 进程、本机文件浏览、文件夹批量导入 |
-| v1.4.1 | 2026-11-22 | Termux 后端、工具按需发现、原创图标与文档 |
+| v1.4.1 | 2026-11-22 | 早期版本（当时使用 Termux 后端；**该后端已在 2.2 移除**）、工具按需发现、原创图标与文档 |
 | v1.3.0 | 2026-11-22 | 首个公开版本（Apache-2.0） |
 
-### 3.1.2 之后、3.5.0 之前的本地版本
-
-这些版本做过完整的本地构建与真机验证，但没有单独发布；**它们的功能都已经包含在 3.5.0 里**：
+### 开发版（功能已全部合入 3.6.0，未单独发布）
 
 | 版本 | 主要内容 | 状态 |
 |---|---|---|
-| 3.5.0-rc.1 / rc.2 / rc.3 | 联网工具修复、破碎动效 / 音效、任务通知、免费搜索后端、提示音、页面栈 | 已合入 3.5.0 |
-| 3.1.6fix | 模型可选、`ProviderCompat`、界面进程被杀后回答不丢 | 已合入 3.5.0 |
-| 3.1.6 | Anthropic / OpenAI 双协议 | 已合入 3.5.0 |
-| 3.1.4 | 思考卡流式、`[工具 · 身份]`、`phone_shell` 进核心 | 已合入 3.5.0 |
-| 3.1.3 | 网页兼容口径、恢复上次会话、输出截断自动续写 | 已合入 3.5.0 |
-| 3.1.2fix | 大参数截断自愈、`phone_web_shot` 离屏截图 | 已合入 3.5.0 |
+| 3.5.2 | 思考看门狗、缓存友好裁剪（长任务实测 90%+）、LLM 区联网搜索过程可见 | 已合入 3.6.0 |
+| 3.5.1 | 思考卡按轮拆分、整对话缓存命中率、LLM 区编辑最后一条用户消息并重答 | 已合入 3.6.0 |
+| 3.5.0fix | DeepSeek 协议下 Agent 思考卡、null 墙与错误提示、百炼 token-plan 地址、OpenAI 方言工具截图、保存 Toast 与设置页刷新 | 已合入 3.6.0 |
+| 3.1.6fix / 3.1.6 / 3.1.4 / 3.1.3 / 3.1.2fix | 双协议、模型可选、思考卡流式、身份标签、网页口径、续写、离屏截图 | 已合入 3.5.0 / 3.6.0 |
 
 <a id="oss"></a>
 
-## 完全开源
+## 完全、公开、透明的开源
 
-- 许可证 **Apache-2.0**，应用层代码**全部**在本仓库：原生界面、Agent 循环、工具实现、协议适配、内置运行时接入、发布脚本，没有闭源模块，也没有“仅提供 APK”的部分。
-- 内置运行时（Android toybox、CPython 3.12、Node 24、ripgrep 15）由 `scripts/fetch-native.sh` 按版本下载，**不把二进制提交进仓库**；各自的许可证见 `THIRD_PARTY_NOTICES.md`。
-- `docs/samples/` 里的两个演示文件（`newton-apple.html`、`mountain-sunset.svg`）就是 Agent 在真机上生成的原始产物，随仓库同许可，可以直接打开验证；对应的渲染图在 `docs/assets/`。
-- 仓库里没有任何密钥、签名文件、个人人设素材或设备信息；`.gitignore` 覆盖 `keystore/`、`*.jks`、`local.properties` 等。
-- Release 由 GitHub Actions 用仓库 Secrets 里的发布密钥从源码构建，产物附 `SHA256SUMS`；你也可以按下面的命令自己从源码构建同一份 APK。
-- CI（`.github/workflows/ci.yml`）在每次 push 时构建 debug APK，构建失败会直接暴露。
-- 关注点分离：`docs/ARCHITECTURE.md`（架构）、`docs/AGENT-RUNTIME.md`（运行时与事件协议）、`SECURITY.md`（威胁模型）。
-
-<a id="runtime"></a>
-
-## 架构与运行时路径
-
-DLA 的 Agent 不是黑盒：从你按下发送，到工具真正执行，路径如下（文件都在本仓库里）。完整说明见 [`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md)。
-
-<details>
-<summary>展开：一次 Agent 任务的完整链路</summary>
-
-```text
-android/.../nativeui/ChatEngine.kt        原生界面 startAgent(payload) → AgentClient.get().start
-        │                                  事件经 Messenger 回放到界面
-        ▼
-android/.../agent/AgentClient.java        UI 进程门面：bindService + Messenger（attach 带 cursor 回放）
-        ▼
-android/.../agent/AgentService.java       跑在 :agent 进程：specialUse 前台服务 + 通知栏紧急停止 + 保活
-        ▼
-android/.../agent/AgentRuntime.java       单实例状态机：事件缓冲、checkpoint、停止
-        ▼
-android/.../agent/AgentRunner.java        原生 Agent 循环
-   ├─ connectTools()                       MCP / 核心手机工具 / phone_sh / 运行时目录 / 联网 / 任务记忆
-   ├─ ProviderCompat + OpenAiWire          协议与供应商适配（Anthropic 原样 / OpenAI 方言映射）
-   ├─ streamRound()                        POST 到你配置的端点，SSE 解析文本、思考与 tool_use
-   ├─ executeTool()                        RuntimeTools ▸ LocalTools ▸ McpClient ▸ WebTools ▸ TaskTools
-   ├─ AgentRunJournal                      files/agent-runs/<requestId>.json（700ms 节流，界面重启认领）
-   └─ emit()                               tool_start / tool_result / status / task_state / usage / done → UI
-         ▼
-工具后端
-   LocalTools.java + ChatDemoAccessibilityService.java   无障碍读屏、点击、应用/文件/设置/截图
-   ShizukuShell.java                                      Shizuku（uid 2000 shell）执行命令
-   NativeShell.java / PythonTool.java / NodeTool.java     内置 shell / CPython / Node，子进程或 JNI
-   ProcessRunner.java / RuntimeEnv.java                   进程树 killer、PATH 与软链
-   WebTools.java                                          原生 web_fetch + 免费搜索后端 + 官方搜索分发
-   WebShot.java / WebShotReceiver.kt                      离屏网页截图（主进程窗口里渲染）
-   Shatter.kt / SoundFeedback.kt                          点击破碎动效 / 独立线程音效与完成音
-```
-
-</details>
-
-关键约束（都可核对代码）：
-
-| 约束 | 位置 |
-|---|---|
-| 不再有准入拦截：内置 `phone_sh` 永远可用，装完就能对话 | `AgentRuntime.start()` |
-| 工具按可用性裁剪：没有 Shizuku 就不注入需要特权的 `phone_*`；无障碍工具按无障碍状态裁剪 | `AgentRunner.connectTools()` |
-| 核心工具 13 个（含 `phone_sh` 与读图 `phone_view_image`），Shizuku 就绪时直接加 `phone_shell`；其余走 `tool_search` 按需发现 | `AgentRunner.CORE_LOCAL` |
-| 危险工具审批：界面审批卡，等待上限 120 秒 | `AgentRunner.awaitApproval()` |
-| 连续 5 次完全相同的调用会被拦截 | `AgentRunner` 循环 |
-| 单轮上限 120 轮，连续单工具轮会收到批量提示 | `AgentRunner.run()` |
-| 工具参数被截断 → 返回可恢复错误（教分段写），本轮继续 | `AgentRunner.parseArguments()` / `TRUNCATED_ARGS_HINT` |
-| 撞到输出上限且无工具调用 → 自动续写最多 3 次 | `AgentRunner.run()` |
-| 停止：通知栏停止按钮 / Agent UI 停止；本次运行的进程树一并结束（setsid 进程组 + pkill） | `AgentService`、`AgentRuntime`、`RuntimeTools.cancelAll()` |
-| 独立进程：UI 进程崩溃/被回收，`:agent` 里的任务继续，重新绑定后按游标回放 | `AndroidManifest.xml`、`AgentClient` |
-| 运行记账与重启认领：`files/agent-runs` + `runId` 去重 | `AgentRunJournal`、`ChatEngine.recoverRuns()` |
-| 崩溃恢复：加密 checkpoint（`files/agent-checkpoint`） | `AgentCheckpoint` |
+- **许可证**：**Apache-2.0**。应用层代码**全部**在本仓库：原生界面、Agent 循环、工具实现、协议适配、内置运行时接入、发布脚本，没有闭源模块，也没有“仅提供 APK”的部分。
+- **发布版与开发版同源**：仓库里的 `android/` 就是完整应用；每个 Release 由 GitHub Actions 从 tag 源码构建。你在本机调试用的构建与 Release 页的 APK 来自**同一份源码、同一套功能**；开发时只换包名 / 签名（`io.github.dla.agent` vs `com.example.chatdemo`），方便并存和覆盖安装。**没有内部版、没有隐藏功能**。
+- **可追溯**：每个 Release 对应一个 annotated tag 与一个 commit；`CHANGELOG.md`、`docs/release-notes-<version>.md`、README 三处版本号一致，Release 资产附 `SHA256SUMS`。
+- **可复现**：按 [`BUILD.md`](BUILD.md) 的步骤可以从源码构建同一份 APK；CI（`.github/workflows/ci.yml`）在每次 push 时构建 debug APK，构建失败会直接暴露。
+- **不藏依赖**：内置运行时（Android toybox、CPython 3.12、Node 24、ripgrep 15）由 `scripts/fetch-native.sh` 按版本下载，**不把二进制提交进仓库**；各自许可证见 `THIRD_PARTY_NOTICES.md`。
+- **不藏数据行为**：没有账号、没有遥测、没有中转服务器；模型请求直达你填的端点；权限、网络行为、数据落盘在 [`SECURITY.md`](SECURITY.md)、[`PRIVACY.md`](PRIVACY.md)、[`docs/AGENT-RUNTIME.md`](docs/AGENT-RUNTIME.md) 里逐项写明。
+- **不藏失败**：已知限制、未验证能力、免费搜索后端的反爬风险、TTS 的区域限制，都写在文档与 FAQ 里，不用“应该可以”糊过去。
+- **关注点分离**：`docs/ARCHITECTURE.md`（架构）、`docs/AGENT-RUNTIME.md`（运行时与事件协议）、`SECURITY.md`（威胁模型）。
 
 <a id="build"></a>
 
-## 构建、项目结构与许可
+## 架构、目录与构建
+
+### 仓库结构
+
+```text
+android/   原生 Compose 界面 + Agent 循环 + 内置运行时（shell/Python/Node/rg）+ 发布脚本
+scripts/   fetch-native.sh：获取内置运行时二进制
+docs/      架构、运行时路径、安装、定位说明、发布说明、吉祥物素材
+docs/assets/  真机截图、演示 GIF/PNG
+docs/samples/ Agent 在真机上生成的两个演示产物（HTML / SVG）
+evals/     离线评测用例
+licenses/  第三方许可证原文
+```
+
+### 构建
 
 ```bash
 # 1. 取内置运行时二进制（Node / ripgrep / libc++，不进仓库）
@@ -385,54 +523,37 @@ cd android
 ./gradlew assembleRelease   # 需要 ../keystore/keystore.properties 才会签名
 ```
 
-版本号由 `-PdlaVersionCode=` / `-PdlaVersionName=` 控制（默认 51 / 3.5.0，CI 不带参数，默认值即发布值）。
-Android 侧是 Java + Kotlin 混编（Kotlin 2.1.0 / AGP 8.9.2 / Compose BOM 2024.09.03，jvmTarget 17），
-内置运行时：Node 24 + ripgrep（`jniLibs/arm64-v8a`，由脚本获取）、CPython 3.12（Chaquopy 从 Maven 拉取）。
-构建细节、CI 与发布流程见 [`BUILD.md`](BUILD.md) 与 [`RELEASING.md`](RELEASING.md)。
+版本号由 `-PdlaVersionCode=` / `-PdlaVersionName=` 控制（本仓库默认 **52 / 3.6.0**，CI 不带参数，默认值即发布值）。构建细节、CI 与发布流程见 [`BUILD.md`](BUILD.md) 与 [`RELEASING.md`](RELEASING.md)。
 
-```text
-android/   原生 Compose 界面 + Markdown 渲染器 + 前台服务 + 内置运行时（shell/Python/Node/rg）
-scripts/   fetch-native.sh：获取内置运行时二进制
-docs/      架构、运行时路径、安装、定位说明、吉祥物素材
-docs/assets/  原理图与真机截图、演示 GIF
-docs/samples/ Agent 在真机上生成的两个演示产物（HTML / SVG）
-evals/     离线评测用例
-licenses/  第三方许可证原文
-```
+### 关键约束（都可核对代码）
 
-- 本项目原创代码：**Apache License 2.0**（见 `LICENSE`）。
-- **图标与吉祥物为本项目原创**：应用图标为 v1「Cue」，首页与思考态使用 v1/v2 吉祥物动效（见 [`docs/mascot/`](docs/mascot/README.md)），与本仓库同许可；`docs/assets/` 内的图标与演示图可直接用于介绍 DLA。
-- 内置运行时：Node.js（MIT）、ripgrep（MIT / Unlicense）、CPython（PSF）、Chaquopy（MIT）、Android toybox（0BSD）；Node/ripgrep 的 arm64 二进制来自 DSH-Android 的预编译发布（Apache-2.0）。
-- KaTeX 与 mermaid 按 MIT 许可随 APK 内置；第三方组件许可见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 与 [`NOTICE`](NOTICE)。
-- 不捆绑、不分发官方 Demo 的角色素材或未授权插画；`chat-demo:*` 存储键仅为兼容旧数据，不代表产品身份。
-
-## 这个工程是怎么用 DSH 做出来的
-
-DLA 的开发全程在 **DeepSeek Harness（DSH）** 里进行。DSH 是命令行式的 AI 编程代理：给它一个任务，它自己读代码、改文件、跑构建、连手机验证，再把结果交回来。这个仓库从 1.3 到 3.5.0 的改动，都是这样一轮一轮跑出来的。
-
-| 环节 | DSH 的工具 / 场景 | 大致占比 |
-|---|---|---|
-| 读代码、定位问题 | 读文件、grep/glob 检索 | ≈95% |
-| 改代码 | 写文件 / 精确替换（Kotlin、Java、Gradle、Python 脚本） | ≈95% 的代码行 |
-| 构建与签名 | shell 跑 Gradle、切换 release keystore、aapt2/apksigner 校验 | ≈100% |
-| 真机验证 | adb 安装、logcat、uiautomator、截图比对 | ≈90% |
-| 素材生成 | 用无头浏览器渲染产物帧、合成 GIF/PNG 并核对 | ≈100% |
-| 文档与发布 | README/CHANGELOG/Release notes、git commit/tag/push、gh release | ≈90% |
-
-剩下的 5–10% 是作者亲手做的：定需求、拍板取舍、看真机效果、决定发不发。作者的定位是**产品负责人和验收人**：不逐行写代码，但对每一行上线代码负责。
+| 约束 | 位置 |
+|---|---|
+| 没有准入拦截：内置 `phone_sh` 永远可用，装完就能对话 | `AgentRuntime.start()` |
+| 工具按可用性裁剪：没有 Shizuku 就不注入需要特权的 `phone_*`；无障碍工具按无障碍状态裁剪 | `AgentRunner.connectTools()` |
+| 核心工具 13 个（含 `phone_sh` 与读图 `phone_view_image`），Shizuku 就绪时直接加 `phone_shell`；其余走 `tool_search` | `AgentRunner.CORE_LOCAL` |
+| 危险工具审批：界面审批卡，等待上限 120 秒 | `AgentRunner.awaitApproval()` |
+| 连续 5 次完全相同的调用会被拦截 | `AgentRunner` 循环 |
+| 单轮上限 120 轮，连续单工具轮会收到批量提示 | `AgentRunner.run()` |
+| 参数截断 → 可恢复错误；输出上限 → 自动续写最多 3 次 | `AgentRunner.parseArguments()` / `run()` |
+| 思考看门狗只降本轮；thinking 块随 assistant 消息回传 | `AgentRunner.run()` / `assistantMessage()` |
+| 停止：本次运行的进程树一并结束（setsid 进程组 + pkill） | `RuntimeTools.cancelAll()` |
+| 运行记账与重启认领：`files/agent-runs` + `runId` 去重 | `AgentRunJournal`、`ChatEngine.recoverRuns()` |
 
 <a id="keywords"></a>
 
 ## 搜索关键词
 
-如果你在找这些东西，DLA 可能正是你要的：
+如果你在找这些东西，DLA 可能正是你要的（**DLA** 是核心检索词）：
 
-`手机 Agent` · `Android Agent` · `Android 智能体` · `本地智能体` · `LLM 人设` · `角色设定` · `AI 伴侣` · `角色扮演` · `AI 聊天` · `TTS 朗读` · `Qwen3-TTS` · `DeepSeek 客户端` · `Anthropic 协议` · `OpenAI 兼容` · `Shizuku` · `无障碍自动化` · `手机自动化` · `Shell` · `Python` · `Node.js` · `网页截图` · `Jetpack Compose` · `本地优先` · `无遥测` · `Apache-2.0`
+`DLA` · `DLA 本地智能体` · `DLA Android` · `DeepSeek LLM Agent` · `手机 Agent` · `Android Agent` · `Android 智能体` · `本地智能体` · `LLM 人设` · `角色设定` · `AI 伴侣` · `角色扮演` · `AI 聊天` · `TTS 朗读` · `Qwen3-TTS` · `DeepSeek 客户端` · `Anthropic 协议` · `OpenAI 兼容` · `ProviderCompat` · `Shizuku` · `无障碍自动化` · `手机自动化` · `Shell` · `Python` · `Node.js` · `网页截图` · `Jetpack Compose` · `本地优先` · `无遥测` · `Apache-2.0`
+
+<a id="english"></a>
 
 ## English summary
 
-DLA (DeepSeek LLM Agent) 3.5.0 is an unofficial, **local-first Android agent** built around two **equal** halves. The **LLM area** is a configurable AI companion / role-play partner: a 10-field persona, AI persona completion, picture-to-character analysis, portrait injection that never overrides the written persona, and speech through the system TTS engine or Alibaba Qwen3-TTS. The **Agent area** is a real **phone agent**: it reads the screen through Accessibility, taps and types, runs a bundled shell, Python and Node, reads and writes files, queries apps and device state, fetches web pages natively and searches the web, and — new in 3.5.0 — **renders local HTML off-screen and screenshots it** so the model can inspect and fix its own output. The APK bundles Android toybox, CPython 3.12 (Chaquopy), Node.js 24 and ripgrep, so it needs neither Termux nor root; Shizuku is optional for `pm` / `am` / `settings`.
+**DLA (DeepSeek LLM Agent)** is an unofficial, **local-first Android agent** built around two **equal** halves. The **LLM area** is a configurable AI companion / role-play partner: a 10-field persona, AI persona completion, picture-to-character analysis, portrait injection that never overrides the written persona, and speech through the system TTS engine or Alibaba Qwen3-TTS. The **Agent area** is a real **phone agent**: it reads the screen through Accessibility, taps and types, runs a bundled shell, Python and Node, reads and writes files, queries apps and device state, fetches web pages natively and searches the web, and **renders local HTML off-screen and screenshots it** so the model can inspect and fix its own output. The APK bundles Android toybox, CPython 3.12 (Chaquopy), Node.js 24 and ripgrep, so it needs neither Termux nor root; **Termux support was removed entirely in 2.2 and is not an optional backend**. Shizuku is optional for `pm` / `am` / `settings`.
 
-3.5.0 is everything since the last public release (v3.1.2): a protocol layer that speaks **Anthropic Messages or OpenAI Chat Completions** with a `ProviderCompat` adapter (12 provider presets, auto-detection, per-provider quirks), a model picker that works right after `fetch models`, native `web_fetch` plus free search backends with diagnostics for `web_search`, a run journal (`files/agent-runs`) that recovers answers after the UI process is killed, truncation self-healing for oversized tool arguments, automatic continuation when the model hits its output cap, `[tool · identity]` labels on every tool result, a real back stack, a shatter tap effect with off-main-thread sound, task notifications on `agent-result-v2`, and a 0.35 s completion chime on media volume.
+**3.6.0** keeps the agent thinking round after round: the watchdog only downgrades the current round (the next round thinks again), the truncated reasoning tail is fed back into the retry, the per-round thinking budget tightens 12K → 6K → 3K characters under repeated overruns, and thinking blocks (with signatures) are passed back in assistant messages as the Anthropic/DeepSeek API requires. The UI collects every “round N” into one collapsible **Process** card below the iteration tree (expanded while running, collapsed when done), and the status bar now shows cache hit rate and turn time on their own line above the context bar. **3.5.0** is the previous public release: Anthropic / OpenAI dual protocol with the `ProviderCompat` adapter (12 presets, auto-detection, per-provider quirks), a model picker after `fetch models`, native `web_fetch` plus free search backends with diagnostics for `web_search`, a run journal (`files/agent-runs`) that recovers answers after the UI process is killed, truncation self-healing, automatic continuation, `[tool · identity]` labels, a real back stack, a shatter tap effect, task notifications on `agent-result-v2`, and a 0.35 s completion chime on media volume.
 
-No account, no telemetry, no relay server: chats, personas, attachments, run journals and settings stay on the device, and model calls go straight to the endpoint you configure. Arm64 devices only, Android 10+. Fully open source under Apache-2.0 — see `docs/AGENT-RUNTIME.md`, `docs/ARCHITECTURE.md` and `BUILD.md`.
+No account, no telemetry, no relay server: chats, personas, attachments, run journals and settings stay on the device, and model calls go straight to the endpoint you configure. Arm64 devices only, Android 10+. **Fully open source under Apache-2.0**; the published APK is built from this repository by GitHub Actions, with `SHA256SUMS` for verification. See `docs/AGENT-RUNTIME.md`, `docs/ARCHITECTURE.md` and `BUILD.md`.

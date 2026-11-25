@@ -1,6 +1,6 @@
 # 安装与首次配置（Android）
 
-> 3.5.0：原生 Compose 界面是唯一入口；没有网页界面，也不需要 Termux——shell、Python、Node、ripgrep 都在 APK 里。模型接口支持 Anthropic Messages 与 OpenAI Chat Completions 两种协议。
+> 3.6.0：原生 Compose 界面是唯一入口；没有网页界面，也不需要 Termux——shell、Python、Node、ripgrep 都在 APK 里。模型接口支持 Anthropic Messages 与 OpenAI Chat Completions 两种协议。
 
 ## 1. 要求
 
@@ -9,7 +9,7 @@
 - **可选增强**：
   - **Shizuku**：提供 uid 2000 的 shell，`pm / am / settings / dumpsys` 这类特权命令只有它能跑；
   - **无障碍服务**：开启后读屏 / 截图 / 点按类工具才可用。
-- **不需要 Termux**：Android 自带 shell（toybox）、CPython 3.12、Node 24、ripgrep 随 APK 提供，装完即可执行。
+- **不需要 Termux，也不支持 Termux**：Termux 集成已在 2.2 整体删除（不是可选后端）。Android 自带 shell（toybox）、CPython 3.12、Node 24、ripgrep 随 APK 提供，装完即可执行。
 
 ## 2. 下载与校验
 
@@ -157,6 +157,7 @@ adb install -r DLA-<version>.apk
 
 | 现象 | 原因 / 处理 |
 |---|---|
+| 需要装 Termux 吗？ | 不需要，也不支持：Termux 集成已在 2.2 整体删除；内置 shell / Python / Node / ripgrep |
 | 发送后提示“请先在设置里填写 API Key” | 没填 Key 或保存失败；到 设置 → 模型接口 重新保存 |
 | 拉取模型报 401 / 403 | Key 不对，或这个 Key 没有该端点的模型列表权限；换地址也没用 |
 | 对话报 400 / 说什么参数缺失 | 协议与端点不匹配（Anthropic 端点用了 OpenAI 方言，或反过来）；用「供应商预设」重选一次，或检查 Base URL 结尾是 `/anthropic/v1` 还是 `/v1` |
