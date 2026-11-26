@@ -48,6 +48,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -103,6 +104,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -119,6 +121,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -148,10 +151,52 @@ class NativeShellActivity : ComponentActivity() {
         @Volatile
         var instance: NativeShellActivity? = null
             private set
+
+        /** 启动参数：直接落到指定页面（home|llm|agent|settings|advanced） */
+        const val EXTRA_SCREEN = "screen"
+
+        /** 启动参数：把一段文字送进对话（--es text / --ez send / --es zone） */
+        const val EXTRA_TEXT = "text"
+        const val EXTRA_SEND = "send"
+        const val EXTRA_ZONE = "zone"
     }
 
     /** 通知点进来要打开的会话 id（Activity 已在前台时也能收到） */
     private val sessionRequest = MutableStateFlow<String?>(null)
+
+    /** adb / 通知请求的目标页面（层叠页，不打开会话） */
+    private val screenRequest = MutableStateFlow<String?>(null)
+
+    /**
+     * adb 送进来的一段文字（`--es text`）。
+     *
+     * 为什么要这个入口：`input text` 只能发 ASCII，中文/emoji 送不进 Compose 输入框；
+     * 而「先写剪贴板再粘贴」在 Compose 的 TextField 上并不可靠（没有粘贴菜单）。
+     * 由应用自己收文本、直接交给 ChatEngine.send 最稳，也最快。
+     */
+    private val textRequest = MutableStateFlow<TextRequest?>(null)
+
+    private fun consumeTextIntent(intent: android.content.Intent?) {
+        val text = intent?.getStringExtra(EXTRA_TEXT)
+        if (text.isNullOrEmpty()) return
+        val send = intent.getBooleanExtra(EXTRA_SEND, true)
+        val zone = intent.getStringExtra(EXTRA_ZONE)?.takeIf { it == "agent" || it == "llm" }
+        Log.d("DlaAgent", "text request: ${text.length} chars send=$send zone=$zone")
+        textRequest.value = TextRequest(text, send, zone)
+        intent?.removeExtra(EXTRA_TEXT)
+        intent?.removeExtra(EXTRA_SEND)
+        intent?.removeExtra(EXTRA_ZONE)
+    }
+
+    private fun consumeScreenIntent(intent: android.content.Intent?) {
+        val target = intent?.getStringExtra(EXTRA_SCREEN)
+        if (!target.isNullOrBlank()) {
+            Log.d("DlaAgent", "screen request from intent: $target")
+            screenRequest.value = target.trim().lowercase()
+            // 同一个 Intent 只消费一次，避免 onResume 反复跳页
+            intent?.removeExtra(EXTRA_SCREEN)
+        }
+    }
 
     private fun consumeSessionIntent(intent: android.content.Intent?) {
         val id = intent?.getStringExtra(com.example.chatdemo.agent.AgentService.EXTRA_SESSION)
@@ -167,6 +212,8 @@ class NativeShellActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeSessionIntent(intent)
+        consumeScreenIntent(intent)
+        consumeTextIntent(intent)
     }
 
     override fun onResume() {
@@ -178,6 +225,8 @@ class NativeShellActivity : ComponentActivity() {
         runCatching { ChatEngine.recoverRuns() }
         // 有些机型点通知只把界面拉到前台、不走 onNewIntent：这里补一次，且幂等
         consumeSessionIntent(intent)
+        consumeScreenIntent(intent)
+        consumeTextIntent(intent)
     }
 
     override fun onDestroy() {
@@ -193,6 +242,8 @@ class NativeShellActivity : ComponentActivity() {
         enableEdgeToEdge()
         ChatEngine.attach(this)
         consumeSessionIntent(intent)
+        consumeScreenIntent(intent)
+        consumeTextIntent(intent)
 
         setContent {
             var themeMode by remember { mutableStateOf(ChatEngine.themeMode) }
@@ -216,6 +267,8 @@ class NativeShellActivity : ComponentActivity() {
                         ChatEngine.themeMode = it
                     },
                     sessionRequests = sessionRequest,
+                    screenRequests = screenRequest,
+                    textRequests = textRequest,
                 )
             }
         }
@@ -412,10 +465,38 @@ private fun restoreScreen(): Screen {
     }
 }
 
+/**
+ * 把偏好里的整条路径还原成页面栈（[首页 → 分区 → 会话 → 设置 …]）。
+ *
+ * 规则：坏键丢掉；已删除的会话层丢掉；会话页上一级必须是它所属的分区；
+ * 最后一个会话会被真正打开（复用它已有的草稿与滚动位置）。
+ * 路径为空（首次安装 / 老版本升级）时退回只记一页的 [restoreScreen]。
+ */
+private fun restoreStack(): List<Screen> {
+    val keys = ChatEngine.lastStack.split('>').map { it.trim() }.filter { it.isNotEmpty() }
+    val parsed = keys.mapNotNull { screenFromKey(it) }
+        .filterNot { it is Screen.Chat && !ChatEngine.sessionExists(it.id) }
+    val base = if (parsed.isEmpty()) listOf(restoreScreen()) else parsed
+    val fixed = mutableListOf<Screen>()
+    for (screen in base) {
+        if (screen is Screen.Chat) {
+            val mode = runCatching {
+                // 已经在 restoreScreen 里打开过的会话不重复解析同一份 JSON
+                if (ChatEngine.open.value?.id != screen.id) ChatEngine.open(screen.id)
+                ChatEngine.open.value?.mode ?: ChatEngine.sessionMode(screen.id)
+            }.getOrNull() ?: "agent"
+            if (fixed.lastOrNull() !is Screen.Zone) fixed += Screen.Zone(mode)
+        }
+        if (fixed.lastOrNull() == screen) continue
+        fixed += screen
+    }
+    if (fixed.isEmpty()) fixed += Screen.Home
+    return fixed
+}
+
 private sealed interface Screen {
     /** 首页：只有两个分区入口，不再混排会话记录 */
     data object Home : Screen
-
     /** 分区页：LLM / Agent 各自的会话列表，互不混排 */
     data class Zone(val mode: String) : Screen
 
@@ -423,6 +504,9 @@ private sealed interface Screen {
     data object Settings : Screen
     data object Advanced : Screen
 }
+
+/** 从 intent 进来的一段文字：内容、是否立刻发送、目标分区。 */
+private data class TextRequest(val text: String, val send: Boolean, val zone: String?)
 
 /**
  * 页面栈（不是单个页面）。
@@ -447,10 +531,12 @@ private fun NativeApp(
     themeMode: String,
     onThemeMode: (String) -> Unit,
     sessionRequests: kotlinx.coroutines.flow.MutableStateFlow<String?>? = null,
+    screenRequests: kotlinx.coroutines.flow.MutableStateFlow<String?>? = null,
+    textRequests: kotlinx.coroutines.flow.MutableStateFlow<TextRequest?>? = null,
 ) {
-    // 冷启动时恢复上次停留的页面（会话/分区），不必重新点一遍
+    // 冷启动时恢复整条路径（首页→分区→会话→设置），不只是最后一页
     var stack by rememberSaveable(stateSaver = StackSaver) {
-        mutableStateOf(listOf(restoreScreen()))
+        mutableStateOf(restoreStack())
     }
     val screen = stack.last()
     val sessions by ChatEngine.sessions.collectAsState()
@@ -468,22 +554,25 @@ private fun NativeApp(
         if (current is Screen.Chat) {
             val mode = ChatEngine.open.value?.mode ?: "agent"
             ChatEngine.close()
-            stack = if (stack.size >= 2 && stack[stack.size - 2] is Screen.Zone) {
-                stack.dropLast(1)
+            // 上一级已经是分区就退一层；否则补一个同模式分区当上一级
+            val below = stack.dropLast(1)
+            stack = if (below.isNotEmpty() && below.last() is Screen.Zone) {
+                below
             } else {
                 listOf(Screen.Zone(mode))
             }
             return
         }
         if (stack.size >= 2) {
+            // 设置 / 高级设置是弹层：弹掉后下面那一页保持原样（滚动位置由 SaveableStateHolder 保留）
             stack = stack.dropLast(1)
             return
         }
-        // 冷启动直接落在分区页：返回回首页
+        // 冷启动直接落在分区页或弹层：返回回首页
         stack = listOf(Screen.Home)
     }
 
-    val canGoBack = stack.size > 1 || screen is Screen.Chat
+    val canGoBack = stack.size > 1 || screen !is Screen.Home
 
     // 点通知进来：直接落到那条任务所在的会话（上一级补成分区）
     val requestedSession by (sessionRequests ?: remember { MutableStateFlow<String?>(null) })
@@ -520,51 +609,100 @@ private fun NativeApp(
 
     LaunchedEffect(stack) {
         if (screen is Screen.Home || screen is Screen.Zone) ChatEngine.refresh()
-        // 只记「基础页」：设置/高级设置是弹层，重启后应该回到它下面的那一页
+        // 整条路径都记下来：重启后返回层级与上一页的分区、会话都不变
+        ChatEngine.lastStack = stack.joinToString(">") { screenKey(it) }
+        // 兼容旧字段：只记「基础页」，设置/高级设置是弹层
         val base = stack.lastOrNull { it !is Screen.Settings && it !is Screen.Advanced } ?: Screen.Home
         ChatEngine.lastScreen = screenKey(base)
     }
 
+    // adb / 通知可以请求一个目标页面（screen=home|llm|agent|settings|advanced），
+    // 一步落到指定层级，不必再靠多次点击走完整条路径。
+    val requestedScreen by (screenRequests ?: remember { MutableStateFlow<String?>(null) })
+        .collectAsState()
+    LaunchedEffect(requestedScreen) {
+        val target = requestedScreen ?: return@LaunchedEffect
+        val base = stack.filter { it !is Screen.Settings && it !is Screen.Advanced }
+        val next = when (target) {
+            "home" -> listOf(Screen.Home)
+            "llm" -> listOf(Screen.Home, Screen.Zone("llm"))
+            "agent" -> listOf(Screen.Home, Screen.Zone("agent"))
+            "settings" -> base + Screen.Settings
+            "advanced" -> base + Screen.Settings + Screen.Advanced
+            else -> null
+        }
+        if (next != null) {
+            Log.d("DlaAgent", "screen from intent: $target -> ${next.joinToString(">") { screenKey(it) }}")
+            stack = next
+        }
+        screenRequests?.value = null
+    }
+
+    // adb 送进来的文字：没有会话就按 zone 开一个，然后直接发出去。
+    // 中文 / emoji 都走这条（`input text` 只支持 ASCII）。
+    val requestedText by (textRequests ?: remember { MutableStateFlow<TextRequest?>(null) })
+        .collectAsState()
+    LaunchedEffect(requestedText) {
+        val request = requestedText ?: return@LaunchedEffect
+        val zone = request.zone ?: "llm"
+        if (ChatEngine.open.value == null) {
+            ChatEngine.create(zone)
+            ChatEngine.open.value?.id?.let { push(Screen.Chat(it)) }
+        }
+        Log.d("DlaAgent", "text request accepted: send=${request.send} zone=$zone")
+        if (request.send) {
+            ChatEngine.send(request.text, emptyList())
+        } else {
+            ChatEngine.updateDraft(request.text)
+        }
+        textRequests?.value = null
+    }
+
     BackHandler(enabled = canGoBack) { goBack() }
+
+    // 每一页的滚动位置、展开状态各存一份：离开再回来停在原处，不重置到底部
+    val screenStates = rememberSaveableStateHolder()
 
     // 点击处冒出破碎的小方块（只观察指针、不抢点击），配合 SoundFeedback 的短促点击音
     ShatterHost(colors = listOf(DlaColors.Mint, DlaColors.Warm, DlaColors.Text)) {
         Crossfade(targetState = screen, animationSpec = tween(220), label = "screen") { current ->
-            when (current) {
-                is Screen.Home -> HomeScreen(
-                    sessions = sessions,
-                    onOpenZone = { mode -> push(Screen.Zone(mode)) },
-                    onSettings = { push(Screen.Settings) },
-                )
-                is Screen.Zone -> ZoneScreen(
-                    mode = current.mode,
-                    sessions = sessions.filter { it.mode == current.mode },
-                    onBack = { goBack() },
-                    onSettings = { push(Screen.Settings) },
-                    onOpen = { id ->
-                        ChatEngine.open(id)
-                        push(Screen.Chat(id))
-                    },
-                    onDelete = { ChatEngine.delete(it) },
-                    onNew = {
-                        ChatEngine.create(current.mode)
-                        ChatEngine.open.value?.id?.let { push(Screen.Chat(it)) }
-                    },
-                )
-                is Screen.Chat -> ChatScreen(
-                    onBack = { goBack() },
-                    onSettings = { push(Screen.Settings) },
-                )
-                is Screen.Settings -> SettingsScreen(
-                    // 从会话页进设置：返回要回到会话，不能关掉会话、更不能弹回首页
-                    onBack = { goBack() },
-                    onAdvanced = { push(Screen.Advanced) },
-                    themeMode = themeMode,
-                    onThemeMode = onThemeMode,
-                )
-                is Screen.Advanced -> AdvancedSettingsScreen(
-                    onBack = { goBack() },
-                )
+            screenStates.SaveableStateProvider(screenKey(current)) {
+                when (current) {
+                    is Screen.Home -> HomeScreen(
+                        sessions = sessions,
+                        onOpenZone = { mode -> push(Screen.Zone(mode)) },
+                        onSettings = { push(Screen.Settings) },
+                    )
+                    is Screen.Zone -> ZoneScreen(
+                        mode = current.mode,
+                        sessions = sessions.filter { it.mode == current.mode },
+                        onBack = { goBack() },
+                        onSettings = { push(Screen.Settings) },
+                        onOpen = { id ->
+                            ChatEngine.open(id)
+                            push(Screen.Chat(id))
+                        },
+                        onDelete = { ChatEngine.delete(it) },
+                        onNew = {
+                            ChatEngine.create(current.mode)
+                            ChatEngine.open.value?.id?.let { push(Screen.Chat(it)) }
+                        },
+                    )
+                    is Screen.Chat -> ChatScreen(
+                        onBack = { goBack() },
+                        onSettings = { push(Screen.Settings) },
+                    )
+                    is Screen.Settings -> SettingsScreen(
+                        // 从会话页进设置：返回要回到会话，不能关掉会话、更不能弹回首页
+                        onBack = { goBack() },
+                        onAdvanced = { push(Screen.Advanced) },
+                        themeMode = themeMode,
+                        onThemeMode = onThemeMode,
+                    )
+                    is Screen.Advanced -> AdvancedSettingsScreen(
+                        onBack = { goBack() },
+                    )
+                }
             }
         }
     }
@@ -630,7 +768,7 @@ private fun HomeHero() {
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            Lang.t("本地运行 · 模型来自 DeepSeek · 数据不出手机"),
+            Lang.t("本地运行 · 模型由你接入 · 数据不出手机"),
             color = DlaColors.TextDim,
             fontSize = 11.sp,
         )
@@ -973,6 +1111,7 @@ private fun buildRows(messages: List<ChatMessage>): List<ChatRow> {
             val blockRound = when (block) {
                 is Block.Thinking -> block.round
                 is Block.Tool -> block.round
+                is Block.RoundNote -> block.round
                 else -> 0
             }
             if (blockRound > 0) return@forEachIndexed
@@ -990,6 +1129,7 @@ private fun collectRoundGroups(blocks: List<Block>): List<RoundGroup> {
         val blockRound = when (val block = blocks[index]) {
             is Block.Thinking -> block.round
             is Block.Tool -> block.round
+            is Block.RoundNote -> block.round
             else -> 0
         }
         if (blockRound <= 0) {
@@ -1002,6 +1142,7 @@ private fun collectRoundGroups(blocks: List<Block>): List<RoundGroup> {
             val candidateRound = when (candidate) {
                 is Block.Thinking -> candidate.round
                 is Block.Tool -> candidate.round
+                is Block.RoundNote -> candidate.round
                 else -> -1
             }
             if (candidateRound != blockRound) break
@@ -1097,15 +1238,45 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
     }
     // 📂 本机文件浏览（替代原来的 SAF 文档/文件夹按钮）
     var showBrowser by remember(current?.id) { mutableStateOf(false) }
+    // 📷 拍照：相机把照片写进我们给出的 content:// URI，回来压成 data URL 再挂到输入栏
+    var pendingShot by remember(current?.id) { mutableStateOf<java.io.File?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(TakePictureWithGrantContract()) { ok ->
+        val file = pendingShot
+        pendingShot = null
+        if (file != null) {
+            val data = if (ok && file.length() > 0) Attachments.dataUrl(file) else null
+            if (data != null) {
+                pendingAttachments = pendingAttachments + Attachment(
+                    kind = Documents.KIND_IMAGE,
+                    name = file.name,
+                    dataUrl = data,
+                )
+            } else if (ok) {
+                Toast.makeText(context, Lang.t("没有拿到照片，请再试一次"), Toast.LENGTH_SHORT).show()
+            }
+            runCatching { file.delete() }
+        }
+    }
 
     val messages = current?.messages.orEmpty()
     val lastUserId = remember(messages) { messages.lastOrNull { it.role == "user" }?.id }
     val rows = remember(messages) { buildRows(messages) }
     val reversed = remember(rows) { rows.asReversed() }
+    // 模型 + 思考强度：两个区共用一个入口
+    var showModelDialog by remember { mutableStateOf(false) }
 
-    // 反向列表：index 0 就是底部。新消息或流式开始时回到 0 即可保持贴底
+    // 反向列表：index 0 就是底部。
+    // 只在「真的出现新内容」时贴底；从设置/分区返回来时（首次组合同样跳过）
+    // 滚动位置保持离开时的样子，不会被拉回底部。
+    var scrollBaseline by remember(current?.id) { mutableStateOf<Int?>(null) }
     LaunchedEffect(messages.size, current?.streaming) {
-        runCatching { listState.animateScrollToItem(0) }
+        val previous = scrollBaseline
+        scrollBaseline = messages.size
+        if (previous == null) return@LaunchedEffect
+        val nearBottom = listState.firstVisibleItemIndex <= 2
+        if (messages.size > previous || (current?.streaming == true && nearBottom)) {
+            runCatching { listState.animateScrollToItem(0) }
+        }
     }
 
     Scaffold(
@@ -1151,8 +1322,15 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 .windowInsetsPadding(WindowInsets.safeDrawing)
                 .imePadding(),
         ) {
+            ModelEffortPill(current?.mode) { showModelDialog = true }
+            if (showModelDialog) {
+                ModelEffortDialog(
+                    onDismiss = { showModelDialog = false },
+                    onApplied = { showModelDialog = false },
+                )
+            }
             if (current?.mode != "agent") {
-                QuickToggles(cachePercent = current?.usageTotals?.cachePercent)
+                QuickToggles(modeAccent(current?.mode))
             }
             LaunchedEffect(current?.streaming) {
                 while (current?.streaming == true) {
@@ -1244,10 +1422,26 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
 
             // 只在 Agent 区：上下文占用（十段虚线）+ 本轮总耗时（只记这一轮，不累计）
             if (current != null && current.mode == "agent") {
+                // 缓存命中率实时化：运行中把「本次运行已上报的用量」叠到会话累计上，
+                // 每收一轮 usage 就变一次；运行结束后再回到落盘的总计。
+                val live = current.liveUsage
+                val base = current.usageTotals
+                val cachePercent = if (live != null) {
+                    TokenTotals(
+                        input = (base?.input ?: 0) + live.input,
+                        cacheRead = (base?.cacheRead ?: 0) + live.cacheRead,
+                        cacheCreation = (base?.cacheCreation ?: 0) + live.cacheCreation,
+                        output = (base?.output ?: 0) + live.output,
+                    ).cachePercent
+                } else {
+                    base?.cachePercent
+                }
                 AgentUsageBar(
                     usedTokens = current.contextTokens,
                     windowTokens = current.contextWindow,
-                    cachePercent = current.usageTotals?.cachePercent,
+                    cachePercent = cachePercent,
+                    // 有 token 读数但接口没给缓存字段（Qwen / GPT 等）：显示「缓存 —」而不是 0%
+                    cacheKnown = ((base?.promptTotal ?: 0) + (live?.promptTotal ?: 0)) > 0,
                     turnMs = if (current.streaming && current.startedAt > 0) {
                         (nowMs - current.startedAt).coerceAtLeast(0L)
                     } else {
@@ -1261,6 +1455,7 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 enabled = current != null,
                 streaming = current?.streaming == true,
                 attachments = pendingAttachments,
+                accent = modeAccent(current?.mode),
                 onChange = {
                     input = it
                     ChatEngine.updateDraft(it)
@@ -1275,6 +1470,22 @@ private fun ChatScreen(onBack: () -> Unit, onSettings: () -> Unit) {
                 },
                 onStop = { ChatEngine.stop() },
                 onPreview = { previewTarget = it },
+                onPickCamera = {
+                    runCatching {
+                        val file = PhotoCapture.newTarget(context)
+                        val uri = PhotoCapture.uriOf(context, file)
+                        PhotoCapture.grant(context, uri)
+                        pendingShot = file
+                        cameraLauncher.launch(uri)
+                    }.onFailure {
+                        pendingShot = null
+                        Toast.makeText(
+                            context,
+                            Lang.t("打不开相机：%s", it.message ?: it.javaClass.simpleName),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                },
                 onPickImage = {
                     runCatching {
                         imagePicker.launch(
@@ -1608,6 +1819,18 @@ private fun BlockRowView(block: Block, messageId: String, onCopy: (String) -> Un
                     }
                 }
             }
+            is Block.RoundNote -> {
+                // 轮旁白：模型在这一轮调工具前的过渡叙述，放进程卡里，不进正文气泡
+                Text(
+                    Lang.t("旁白 · %s", block.text.trim()),
+                    color = DlaColors.TextDim,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onLongPressText { onCopy(block.text) },
+                )
+            }
             is Block.Other -> Unit
         }
     }
@@ -1654,7 +1877,7 @@ private fun AgentProcessCard(
                     .background(DlaColors.Mint.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("⟳", color = DlaColors.Mint, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                ProcessGlyph(color = DlaColors.Mint, size = 13.dp)
             }
             Spacer(Modifier.width(9.dp))
             Text(
@@ -2018,7 +2241,7 @@ private fun ToolCard(block: Block.Tool) {
 // ---------------- 对话开关 ----------------
 
 @Composable
-private fun QuickToggles(cachePercent: Int? = null) {
+private fun QuickToggles(accent: Color) {
     var thinking by remember { mutableStateOf(ChatEngine.thinking) }
     var search by remember { mutableStateOf(ChatEngine.search) }
     Row(
@@ -2028,37 +2251,28 @@ private fun QuickToggles(cachePercent: Int? = null) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ToggleChip(Lang.t("深度思考"), thinking) {
+        ToggleChip(Lang.t("深度思考"), thinking, accent) {
             thinking = !thinking
             ChatEngine.thinking = thinking
         }
-        ToggleChip(Lang.t("联网搜索"), search) {
+        ToggleChip(Lang.t("联网搜索"), search, accent) {
             search = !search
             ChatEngine.search = search
-        }
-        Spacer(Modifier.weight(1f))
-        if (cachePercent != null) {
-            Text(
-                Lang.t("缓存 %s", "$cachePercent%"),
-                color = DlaColors.TextDim,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-            )
         }
     }
 }
 
 @Composable
-private fun ToggleChip(label: String, active: Boolean, onToggle: () -> Unit) {
-    val accent = if (active) DlaColors.Mint else DlaColors.TextDim
+private fun ToggleChip(label: String, active: Boolean, accent: Color, onToggle: () -> Unit) {
+    val color = if (active) accent else DlaColors.TextDim
     Text(
         text = label,
-        color = accent,
+        color = color,
         fontSize = 11.sp,
         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(if (active) DlaColors.Mint.copy(alpha = 0.14f) else DlaColors.Surface)
+            .background(if (active) accent.copy(alpha = 0.14f) else DlaColors.Surface)
             .clickable(onClick = onToggle)
             .padding(horizontal = 12.dp, vertical = 6.dp),
     )
@@ -2069,12 +2283,81 @@ private fun ToggleChip(label: String, active: Boolean, onToggle: () -> Unit) {
 @Composable
 private fun ConversationSettings() {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var thinking by remember { mutableStateOf(ChatEngine.thinking) }
     var search by remember { mutableStateOf(ChatEngine.search) }
     var autoApprove by remember { mutableStateOf(ChatEngine.autoApprove) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SettingSwitch(Lang.t("深度思考（LLM / Agent 区）"), thinking) { thinking = it; ChatEngine.thinking = it }
         SettingSwitch(Lang.t("联网搜索（LLM 区）"), search) { search = it; ChatEngine.search = it }
+        // DeepSeek 官方搜索/抓取专用 Key：与聊天模型无关，配了就两个区都走官方付费渠道
+        var toolKey by remember { mutableStateOf(ChatEngine.toolKey) }
+        var keyVisible by remember { mutableStateOf(false) }
+        var keyTesting by remember { mutableStateOf(false) }
+        var keyTest by remember { mutableStateOf("") }
+        var keyTestOk by remember { mutableStateOf(false) }
+        OutlinedTextField(
+            value = toolKey,
+            onValueChange = { toolKey = it },
+            label = { Text(Lang.t("DeepSeek 官方搜索 Key（可选）")) },
+            singleLine = true,
+            visualTransformation = if (keyVisible) {
+                VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
+            trailingIcon = {
+                Text(
+                    if (keyVisible) Lang.t("隐藏") else Lang.t("显示"),
+                    color = DlaColors.TextDim,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .clickable { keyVisible = !keyVisible }
+                        .padding(8.dp),
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            Lang.t("填了它，LLM 区和 Agent 区的搜索/抓取都优先走 DeepSeek 官方接口（与聊天模型无关）。"),
+            color = DlaColors.TextDim,
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = {
+                ChatEngine.toolKey = toolKey
+                Toast.makeText(context, Lang.t("已保存"), Toast.LENGTH_SHORT).show()
+            }) { Text(Lang.t("保存官方 Key"), color = DlaColors.Mint) }
+            TextButton(
+                enabled = !keyTesting && toolKey.isNotBlank(),
+                onClick = {
+                    if (!keyTesting) {
+                        keyTesting = true
+                        keyTest = ""
+                        ChatEngine.toolKey = toolKey
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    com.example.chatdemo.agent.WebTools.selfTest(toolKey, ChatEngine.toolOrigin)
+                                }.getOrNull()
+                            }
+                            keyTestOk = result != null && !result.isError
+                            keyTest = result?.text ?: Lang.t("自检失败：没有返回")
+                            keyTesting = false
+                        }
+                    }
+                },
+            ) { Text(if (keyTesting) Lang.t("测试中…") else Lang.t("测试官方 Key"), color = DlaColors.Mint) }
+        }
+        if (keyTest.isNotEmpty()) {
+            Text(
+                keyTest,
+                color = if (keyTestOk) DlaColors.Mint else DlaColors.Error,
+                fontSize = 11.sp,
+                lineHeight = 16.sp,
+            )
+        }
         SettingSwitch(Lang.t("完全权限（Agent 不再逐次确认）"), autoApprove) {
             autoApprove = it
             ChatEngine.autoApprove = it
@@ -2187,13 +2470,24 @@ private fun ThemeChip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+/**
+ * 设置开关。
+ *
+ * 用 `toggleable` 而不是裸 `clickable`：它会把「可切换 / 当前开关值」写进无障碍语义，
+ * uiautomator 因此能在节点上读到 `checkable` / `checked`——自动化（DLA 工程台的
+ * 多步调用）才能确认开关到底是开还是关，而不是点完靠猜。
+ */
 internal fun SettingSwitch(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(DlaColors.Surface)
-            .clickable { onChange(!checked) }
+            .toggleable(
+                value = checked,
+                role = androidx.compose.ui.semantics.Role.Switch,
+                onValueChange = { onChange(it) },
+            )
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2532,14 +2826,17 @@ private fun Composer(
     enabled: Boolean,
     streaming: Boolean,
     attachments: List<Attachment>,
+    accent: Color,
     onChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onPreview: (String) -> Unit,
+    onPickCamera: () -> Unit,
     onPickImage: () -> Unit,
     onPickFiles: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
 ) {
+    var attachMenuOpen by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2605,9 +2902,24 @@ private fun Composer(
             }
         }
         Row(verticalAlignment = Alignment.Bottom) {
-            ComposerIcon("🖼") { onPickImage() }
-            Spacer(Modifier.width(4.dp))
-            ComposerIcon("📂") { onPickFiles() }
+            // 图片 / 文件 / 拍照收口到一个按键：输入栏更干净，也不用再为「第 3 个按钮」找位置
+            AttachButton(
+                expanded = attachMenuOpen,
+                onToggle = { attachMenuOpen = !attachMenuOpen },
+                onDismiss = { attachMenuOpen = false },
+                onPickCamera = {
+                    attachMenuOpen = false
+                    onPickCamera()
+                },
+                onPickImage = {
+                    attachMenuOpen = false
+                    onPickImage()
+                },
+                onPickFiles = {
+                    attachMenuOpen = false
+                    onPickFiles()
+                },
+            )
             Spacer(Modifier.width(8.dp))
             OutlinedTextField(
                 value = value,
@@ -2628,7 +2940,7 @@ private fun Composer(
                     .background(
                         when {
                             streaming -> DlaColors.Error.copy(alpha = 0.18f)
-                            enabled && (value.isNotBlank() || attachments.isNotEmpty()) -> DlaColors.Mint
+                            enabled && (value.isNotBlank() || attachments.isNotEmpty()) -> accent
                             else -> DlaColors.SurfaceHigh
                         },
                     )
@@ -2652,22 +2964,6 @@ private fun Composer(
     }
 }
 @Composable
-private fun ComposerIcon(
-    label: String,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .background(DlaColors.SurfaceHigh)
-            .androidClickableSimple(onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, fontSize = 14.sp)
-    }
-}
-@Composable
 private fun Modifier.navigationBarsPaddingCompat(): Modifier =
     this.windowInsetsPadding(WindowInsets.navigationBars)
 
@@ -2687,6 +2983,7 @@ private fun AgentUsageBar(
     windowTokens: Int,
     turnMs: Long,
     cachePercent: Int? = null,
+    cacheKnown: Boolean = false,
 ) {
     val window = windowTokens.coerceAtLeast(1)
     val percent = if (usedTokens > 0) usedTokens * 100.0 / window else 0.0
@@ -2697,14 +2994,14 @@ private fun AgentUsageBar(
             .padding(horizontal = 16.dp, vertical = 2.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        if (cachePercent != null || turnMs > 0) {
+        if (cacheKnown || turnMs > 0) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (cachePercent != null) {
+                if (cachePercent != null || cacheKnown) {
                     Text(
-                        Lang.t("缓存 %s", "$cachePercent%"),
+                        Lang.t("缓存 %s", cachePercent?.let { "$it%" } ?: "—"),
                         color = DlaColors.Warm,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
@@ -3111,7 +3408,7 @@ private fun SettingsScreen(
             }
 
             Text(
-                Lang.t("DLA · 本地智能体\n模型来自 DeepSeek，非官方产品。\n数据只存在本机。"),
+                Lang.t("DLA · 本地智能体\n模型由你接入，非官方产品。\n数据只存在本机。"),
                 color = DlaColors.TextDim,
                 fontSize = 11.sp,
                 lineHeight = 17.sp,

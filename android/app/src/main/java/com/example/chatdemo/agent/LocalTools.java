@@ -133,7 +133,13 @@ public final class LocalTools {
             case "phone_setting_put":
             case "phone_stop":
             case "phone_zip_extract":
+            case "phone_zip_create":
             case "phone_clipboard_set":
+            case "phone_media":
+            case "phone_image":
+            case "phone_record":
+            case "phone_share":
+            case "phone_http":
                 return true;
             default:
                 return false;
@@ -336,13 +342,39 @@ public final class LocalTools {
                 "读取当前通知列表（dumpsys notification），可能较长。",
                 schema(props())
         ));
+        list.put(tool(
+                "phone_zip_create",
+                "把本机文件/目录打包成 zip（导出、备份、发给别人）。目录会递归打包，条目名保留相对路径。",
+                schema(props(
+                        "paths", p("array", "要打包的绝对路径列表，可以是文件或目录"),
+                        "out", p("string", "输出 zip 的绝对路径")
+                ), "paths", "out")
+        ));
+        // 媒体 / 网络能力单独成类，避免这个文件继续膨胀
+        appendSpecs(list, MediaTools.specs());
+        appendSpecs(list, NetTools.specs());
         return list;
+    }
+
+    private static void appendSpecs(JSONArray target, JSONArray extra) {
+        for (int i = 0; i < extra.length(); i++) {
+            JSONObject item = extra.optJSONObject(i);
+            if (item != null) {
+                target.put(item);
+            }
+        }
     }
 
     public static Result execute(Context context, String name, JSONObject args) {
         currentContext = context;
         JSONObject arguments = args == null ? new JSONObject() : args;
         try {
+            if (MediaTools.handles(name)) {
+                return MediaTools.execute(context, name, arguments);
+            }
+            if (NetTools.handles(name)) {
+                return NetTools.execute(name, arguments);
+            }
             switch (name) {
                 case "phone_shell": {
                     String command = arguments.optString("command");
@@ -771,6 +803,9 @@ public final class LocalTools {
                     String out = run("dumpsys notification --noredact | head -c 12000", 20000);
                     return ok(out);
                 }
+                case "phone_zip_create": {
+                    return zipCreate(arguments);
+                }
                 default:
                     return fail("未知手机工具：" + name);
             }
@@ -778,6 +813,87 @@ public final class LocalTools {
             String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
             return fail(message);
         }
+    }
+
+    /**
+     * 打包文件/目录成 zip。
+     *
+     * 目录递归，条目名用「相对各自父目录」的路径，解压出来还是原来的层级；
+     * 不存在的路径跳过并在结果里点名，避免「打完了却少东西」。
+     */
+    private static Result zipCreate(JSONObject arguments) throws Exception {
+        JSONArray paths = arguments.optJSONArray("paths");
+        String out = arguments.optString("out", "").trim();
+        if (paths == null || paths.length() == 0) {
+            return fail("paths 不能为空");
+        }
+        if (out.isEmpty()) {
+            return fail("out 不能为空");
+        }
+        File target = new File(out);
+        File parent = target.getParentFile();
+        if (parent != null) {
+            parent.mkdirs();
+        }
+        int[] counter = new int[]{0};
+        StringBuilder skipped = new StringBuilder();
+        try (ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(target))) {
+            for (int i = 0; i < paths.length(); i++) {
+                String path = paths.optString(i, "").trim();
+                if (path.isEmpty()) {
+                    continue;
+                }
+                File root = new File(path);
+                if (!root.exists()) {
+                    skipped.append(path).append("；");
+                    continue;
+                }
+                File baseDir = root.isDirectory() ? root : root.getParentFile();
+                addZipEntry(zip, root, baseDir, counter);
+            }
+        }
+        if (counter[0] == 0) {
+            target.delete();
+            return fail("没有可打包的内容" + (skipped.length() > 0 ? "（不存在：" + skipped + "）" : ""));
+        }
+        return ok("已打包 " + counter[0] + " 个文件 → " + target.getAbsolutePath()
+                + "\n体积：" + target.length() + " B"
+                + (skipped.length() > 0 ? "\n跳过（不存在）：" + skipped : ""));
+    }
+
+    private static void addZipEntry(ZipOutputStream zip, File file, File baseDir, int[] counter) throws Exception {
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children == null) {
+                return;
+            }
+            for (File child : children) {
+                addZipEntry(zip, child, baseDir, counter);
+            }
+            return;
+        }
+        String base = baseDir == null ? "" : baseDir.getAbsolutePath();
+        String rel = file.getAbsolutePath();
+        if (rel.startsWith(base)) {
+            rel = rel.substring(base.length());
+        }
+        rel = rel.replace('\\', '/');
+        while (rel.startsWith("/")) {
+            rel = rel.substring(1);
+        }
+        if (rel.isEmpty()) {
+            rel = file.getName();
+        }
+        zip.putNextEntry(new ZipEntry(rel));
+        try (InputStream in = new FileInputStream(file)) {
+            byte[] buffer = new byte[65536];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                zip.write(buffer, 0, read);
+            }
+        }
+        zip.closeEntry();
+        counter[0]++;
     }
 
     /**

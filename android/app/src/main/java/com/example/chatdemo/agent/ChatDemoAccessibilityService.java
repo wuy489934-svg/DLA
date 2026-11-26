@@ -162,7 +162,7 @@ public class ChatDemoAccessibilityService extends AccessibilityService {
         }
     }
 
-    /** 向当前焦点输入框写文字；成功返回 true。 */
+    /** 向当前焦点输入框写文字；没有焦点就先找第一个可编辑节点、聚焦再写，成功返回 true。 */
     public static boolean setFocusedText(String text) {
         ChatDemoAccessibilityService service = instance;
         if (service == null) {
@@ -184,7 +184,31 @@ public class ChatDemoAccessibilityService extends AccessibilityService {
                 focus = root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY);
             }
             if (focus == null || !focus.isEditable()) {
-                return false;
+                // 之前这里直接返回 false，调用方会退回 shell input：坐标落在非输入框上时
+                // 命令「成功」但屏幕上什么都没出现。现在先自己把第一个输入框点开再写。
+                AccessibilityNodeInfo editable = findEditableNode(root, 0);
+                if (editable == null) {
+                    return false;
+                }
+                editable.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                editable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                }
+                Bundle args = new Bundle();
+                args.putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        text
+                );
+                boolean written = editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                try {
+                    editable.recycle();
+                } catch (Throwable ignored) {
+                    // ignore
+                }
+                return written;
             }
             Bundle args = new Bundle();
             args.putCharSequence(
@@ -208,6 +232,45 @@ public class ChatDemoAccessibilityService extends AccessibilityService {
                 }
             }
         }
+    }
+
+    /** 深度优先找第一个可编辑（输入框）节点 */
+    private static AccessibilityNodeInfo findEditableNode(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 25) {
+            return null;
+        }
+        if (node.isEditable()) {
+            return node;
+        }
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = null;
+            try {
+                child = node.getChild(i);
+            } catch (Throwable ignored) {
+                // ignore
+            }
+            if (child == null) {
+                continue;
+            }
+            AccessibilityNodeInfo found = findEditableNode(child, depth + 1);
+            if (found != null) {
+                if (found != child) {
+                    try {
+                        child.recycle();
+                    } catch (Throwable ignored) {
+                        // ignore
+                    }
+                }
+                return found;
+            }
+            try {
+                child.recycle();
+            } catch (Throwable ignored) {
+                // ignore
+            }
+        }
+        return null;
     }
 
     /** 系统级按键；返回是否由无障碍直接处理。 */

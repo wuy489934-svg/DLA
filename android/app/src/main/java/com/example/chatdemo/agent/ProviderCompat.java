@@ -47,6 +47,15 @@ public final class ProviderCompat {
     public static final String THINKING_NONE = "none";
 
     /**
+     * LLM 区统一的「中等 / 平衡」思考预算（tokens）。
+     *
+     * 各家写法不同：Claude 用 thinking.budget_tokens，千问/百炼用 thinking_budget；
+     * DeepSeek 端点保持原协议（不下发预算）。数值取 4096：够做多步推理，又不至于把
+     * 延迟和费用拉满。
+     */
+    public static final int THINKING_BUDGET_MEDIUM = 4096;
+
+    /**
      * 供应商预设：给设置页「一键填好协议 + Base URL + 默认模型」用。
      *
      * 字段：id / name / protocol / baseUrl / model / note
@@ -185,7 +194,9 @@ public final class ProviderCompat {
 
     /** 只有确认支持的端点才带 stream_options.include_usage，避免个别兼容层直接 400 */
     public static boolean supportsStreamOptions(String provider) {
-        return DEEPSEEK.equals(provider) || OPENAI.equals(provider);
+        // 千问 / 百炼的 OpenAI 兼容模式支持 include_usage；之前没带，导致 Qwen 的
+        // token 用量与缓存字段整个拿不到（界面只能显示「缓存 —」）
+        return DEEPSEEK.equals(provider) || OPENAI.equals(provider) || QWEN.equals(provider);
     }
 
     /** 这些模型不接受自定义温度（传了会 400） */

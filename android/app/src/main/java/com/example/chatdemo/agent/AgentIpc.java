@@ -23,6 +23,15 @@ public final class AgentIpc {
 
     public static final String KEY_ID = "id";
     public static final String KEY_PAYLOAD = "payload";
+    /**
+     * 大请求的落盘路径（UTF-8 JSON）。
+     *
+     * Binder 单次事务只有 ~1 MB，而 Agent 区带图片时请求体（base64）动辄几 MB，
+     * 直接塞进 Bundle 会抛 TransactionTooLargeException：消息发不出去，界面却以为
+     * 任务已开始，于是一直「生成中」、模型既不思考也不回复（用户说的「空转」）。
+     * 超限的请求改为写进应用私有目录，只把这根路径过 Binder。
+     */
+    public static final String KEY_PAYLOAD_FILE = "payloadFile";
     public static final String KEY_TOOL_ID = "toolId";
     public static final String KEY_ALLOWED = "allowed";
     public static final String KEY_JSON = "json";

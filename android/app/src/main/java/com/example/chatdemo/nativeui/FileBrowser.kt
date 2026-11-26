@@ -142,6 +142,29 @@ object LocalFiles {
         ).firstOrNull { it.isDirectory } ?: root
     }
 
+    /**
+     * 绝对路径解析：以 `/` 开头、`~` 开头或写成「内部存储/…」都认。
+     *
+     * 返回 File 不代表它存在——上层用「存在则直达 / 不存在则按父目录 + 文件名搜」两种策略。
+     * 不是路径形态（普通关键词）返回 null，走原来的搜索。
+     */
+    fun asPath(raw: String): File? {
+        val text = raw.trim()
+        if (text.isEmpty()) return null
+        val root = storageRoot()
+        return when {
+            text == "~" -> root
+            text.startsWith("~/") -> File(root, text.substring(2))
+            text == "内部存储" -> root
+            text.startsWith("内部存储/") -> File(root, text.removePrefix("内部存储/"))
+            text.startsWith("/") -> File(text)
+            else -> null
+        }
+    }
+
+    /** 全盘搜索：从存储根开始，忽略当前目录 */
+    fun searchAll(query: String): List<File> = search(storageRoot(), query)
+
     fun children(dir: File): List<File> {
         val files = runCatching { dir.listFiles() }.getOrNull() ?: return emptyList()
         return files
@@ -367,11 +390,27 @@ private fun BrowserBody(
     var entries by remember { mutableStateOf<List<File>>(emptyList()) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var busy by remember { mutableStateOf(false) }
+    /** 搜索范围：默认当前目录；打开后从存储根全盘搜 */
+    var wholeDisk by remember { mutableStateOf(false) }
 
-    LaunchedEffect(current, query) {
+    LaunchedEffect(current, query, wholeDisk) {
+        val raw = query.trim()
+        // 绝对路径只「预览」不自动跳转：一个字一个字输入时会一路跳目录，反而找不到东西
+        val target = LocalFiles.asPath(raw)
         busy = true
         entries = withContext(Dispatchers.IO) {
-            if (query.isBlank()) LocalFiles.children(current) else LocalFiles.search(current, query)
+            when {
+                raw.isBlank() -> LocalFiles.children(current)
+                target == null -> if (wholeDisk) LocalFiles.searchAll(raw) else LocalFiles.search(current, raw)
+                target.isDirectory -> LocalFiles.children(target)
+                target.isFile -> listOf(target)
+                target.parentFile?.isDirectory == true -> LocalFiles.children(target.parentFile!!)
+                    .filter { !it.isDirectory && it.name.contains(target.name, ignoreCase = true) }
+                else -> LocalFiles.searchAll(target.name)
+            }
+        }
+        if (target != null && target.isFile && entries.size == 1) {
+            selected = setOf(target.absolutePath)
         }
         busy = false
     }
@@ -412,12 +451,47 @@ private fun BrowserBody(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp),
-            placeholder = { Text(Lang.t("搜索当前目录（含子文件夹）"), color = DlaColors.TextDim, fontSize = 13.sp) },
+            placeholder = {
+                Text(
+                    Lang.t("搜文件名，或直接粘贴绝对路径（/sdcard/…）"),
+                    color = DlaColors.TextDim,
+                    fontSize = 13.sp,
+                )
+            },
             singleLine = true,
             shape = RoundedCornerShape(14.dp),
             textStyle = androidx.compose.ui.text.TextStyle(color = DlaColors.Text, fontSize = 14.sp),
         )
         Spacer(Modifier.height(6.dp))
+        // 绝对路径命中目录时给一个明确的「进入」：输入过程中不会自动跳，避免边打字边换目录
+        val pathTarget = LocalFiles.asPath(query.trim())
+        if (pathTarget != null && pathTarget.isDirectory) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(DlaColors.Mint.copy(alpha = 0.10f))
+                    .padding(start = 10.dp, end = 6.dp, top = 2.dp, bottom = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    pathTarget.absolutePath,
+                    color = DlaColors.Text,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    current = pathTarget
+                    query = ""
+                }) {
+                    Text(Lang.t("进入"), color = DlaColors.Mint, fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -447,6 +521,21 @@ private fun BrowserBody(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            Spacer(Modifier.width(6.dp))
+            // 搜索范围：当前目录 ↔ 全盘（全盘慢一点，但不用一层层点进去找）
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (wholeDisk) DlaColors.Mint.copy(alpha = 0.16f) else DlaColors.SurfaceHigh)
+                    .clickable { wholeDisk = !wholeDisk }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    if (wholeDisk) Lang.t("全盘") else Lang.t("当前目录"),
+                    color = if (wholeDisk) DlaColors.Mint else DlaColors.TextDim,
+                    fontSize = 11.sp,
+                )
+            }
         }
         Spacer(Modifier.height(4.dp))
         Box(Modifier.weight(1f)) {
@@ -591,7 +680,8 @@ private fun EntryRow(
             )
             val subtitle = when {
                 file.isDirectory -> Lang.t("文件夹")
-                showParent -> LocalFiles.displayPath(file.parentFile ?: file) +
+                // 搜索结果直接给绝对路径：能复制、能贴回搜索框，也方便让 Agent 直接读
+                showParent -> (file.parentFile?.absolutePath ?: file.absolutePath) +
                     " · " + LocalFiles.formatSize(file.length())
                 else -> LocalFiles.formatSize(file.length())
             }

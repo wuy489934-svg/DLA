@@ -43,6 +43,11 @@ sealed interface Block {
         val round: Int = 0,
     ) : Block
     data class Other(val type: String) : Block
+    /**
+     * Agent 区某一轮的「旁白」：工具调用之间模型的过渡叙述。
+     * 不放进正文气泡，收在「执行过程」卡里对应轮次的最前面。
+     */
+    data class RoundNote(val text: String, val round: Int) : Block
 }
 
 /** 一条消息（用户或助手） */
@@ -131,9 +136,15 @@ data class TokenTotals(
     val requests: Int = 0,
 ) {
     val promptTotal: Int get() = input + cacheRead + cacheCreation
-    /** null 表示接口没给缓存字段，显示「—」而不是假的 0% */
+    /**
+     * null 表示接口没给缓存字段（或这一轮缓存命中为 0），显示「—」而不是假的 0%。
+     *
+     * Qwen / GPT 这类端点不回报 cached_tokens 时，旧算法会算出一个「0%」，
+     * 看起来像缓存能力坏了；现在只要没有缓存读数就显示「—」。
+     */
     val cachePercent: Int?
-        get() = if (promptTotal <= 0) null else Math.round(cacheRead * 100f / promptTotal)
+        get() = if (promptTotal <= 0 || (cacheRead == 0 && cacheCreation == 0)) null
+        else Math.round(cacheRead * 100f / promptTotal)
     val isEmpty: Boolean get() = requests == 0 && promptTotal == 0 && output == 0
 }
 
@@ -351,6 +362,7 @@ object SessionParser {
             elapsedMs = json.optLong("elapsedMs", 0L),
             round = json.optInt("round", 0),
         )
+        "round_note" -> Block.RoundNote(cleanLegacyNulls(json.str("text")), json.optInt("round", 0))
         else -> Block.Other(type)
     }
 }

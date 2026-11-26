@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +40,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,8 +74,10 @@ fun IterationTree(
     /** 这一轮从开始到结束的真实耗时；0 表示老数据，退回按工具耗时求和 */
     totalMs: Long = 0L,
 ) {
-    var expanded by remember(rounds) { mutableStateOf(false) }
-    var openRound by remember(rounds) { mutableStateOf<Int?>(null) }
+    // 不按 rounds 做 key：流式输出时 rounds 每帧都是新 List，key 一变就把用户展开的状态重置掉
+    // （这就是「模型还在输出时迭代树自己关掉」的老 bug）。卡片本身在 LazyColumn 里有稳定 key。
+    var expanded by remember { mutableStateOf(false) }
+    var openRound by remember { mutableStateOf<Int?>(null) }
     val totalSteps = rounds.sumOf { it.tools.size }
     val toolMs = rounds.sumOf { round -> round.tools.sumOf { it.elapsedMs } }
     val shownMs = if (totalMs > 0) totalMs else toolMs
@@ -177,6 +184,30 @@ fun IterationTree(
                 }
             }
         }
+    }
+}
+
+/**
+ * 「执行过程」的自家图标：一枚搜证用的放大镜。
+ *
+ * 思考卡用吉祥物（溟灯），执行过程用放大镜：一眼能分清「它在想」还是「它在查/做」。
+ */
+@Composable
+fun ProcessGlyph(color: Color = DlaColors.Mint, size: androidx.compose.ui.unit.Dp = 14.dp) {
+    Canvas(modifier = Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val stroke = w * 0.13f
+        val radius = w * 0.28f
+        val center = Offset(w * 0.42f, h * 0.42f)
+        drawCircle(color = color, radius = radius, center = center, style = Stroke(width = stroke))
+        drawLine(
+            color = color,
+            start = Offset(center.x + radius * 0.75f, center.y + radius * 0.75f),
+            end = Offset(w * 0.88f, h * 0.88f),
+            strokeWidth = stroke * 1.2f,
+            cap = StrokeCap.Round,
+        )
     }
 }
 

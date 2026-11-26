@@ -2,19 +2,21 @@
 
 ## Current release
 
-DLA **3.6.0** is the latest published open-source release:
+DLA **26.11.4** is the latest published open-source release:
 
 - Repository: https://github.com/wuy489934-svg/DLA
-- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v3.6.0
-- Tag: `v3.6.0`（`versionCode 52` / `versionName 3.6.0`）
-- APK package: `com.example.chatdemo`（与 v3.5.0 / v3.1.2 / v3.0 相同，可直接覆盖升级）
+- Release: https://github.com/wuy489934-svg/DLA/releases/tag/v26.11.4
+- Tag: `v26.11.4`（`versionCode 62` / `versionName 26.11.4`）——版本体系是
+  `年.月.迭代`（26 = 2026、11 = 11 月、4 = 当月第 4 个迭代），`versionCode`
+  继续单调递增（v3.6.0 是 52）。
+- APK package: `com.example.chatdemo`（与 v3.6.0 / v3.5.0 / v3.1.2 / v3.0 相同，可直接覆盖升级）
 - APK + `SHA256SUMS` are attached to the Release, built by CI from the tag and signed
   with the release key (`f5111725…426c4`).
-- User-facing notes: [`docs/release-notes-3.6.0.md`](docs/release-notes-3.6.0.md)；
+- User-facing notes: [`docs/release-notes-26.11.4.md`](docs/release-notes-26.11.4.md)；
   版本摘要见 `CHANGELOG.md`。
 
-Previous releases: `v3.5.0`（3.5.0）、`v3.1.2`（3.1.2）、`v3.0`（3.0）、`v2.1`（2.1）、
-`v2.0`（2.0）、`v1.4.1`（1.4.1）、`v1.3.0`（1.3.0）。
+Previous releases: `v3.6.0`（3.6.0）、`v3.5.0`（3.5.0）、`v3.1.2`（3.1.2）、`v3.0`（3.0）、
+`v2.1`（2.1）、`v2.0`（2.0）、`v1.4.1`（1.4.1）、`v1.3.0`（1.3.0）。
 
 ## Build locally
 
@@ -56,8 +58,8 @@ are exactly what gets published — they must be bumped for every release:
 
 | Property | Default | Meaning |
 |---|---|---|
-| `dlaVersionCode` | `52` | published `versionCode` |
-| `dlaVersionName` | `3.6.0` | published `versionName` |
+| `dlaVersionCode` | `62` | published `versionCode` |
+| `dlaVersionName` | `26.11.4` | published `versionName` |
 | `appId` | `com.example.chatdemo` | published package id (the workflow does not override it) |
 | `dlaPythonVersion` | `3.12` | Chaquopy Python version |
 | `dlaBuildPython` | unset (or `DLA_BUILD_PYTHON`) | build-machine interpreter used to compile the stdlib to pyc |
@@ -83,7 +85,7 @@ resources; debug builds are not.
 ## Publishing a follow-up release
 
 1. Update `dlaVersionCode` / `dlaVersionName` defaults in `android/app/build.gradle`
-   (for `v3.6.0` → `52` / `3.6.0`).
+   (for `v26.11.4` → `62` / `26.11.4`).
 2. Update `CHANGELOG.md`, `docs/release-notes-<version>.md`, the version badge and the
    feature list in `README.md`.
 3. Build locally (`./gradlew assembleRelease`) and record the APK `package /
@@ -92,8 +94,8 @@ resources; debug builds are not.
 5. Create and push an annotated tag:
 
 ```bash
-git tag -a v3.6.0 -m "DLA 3.6.0"
-git push origin main v3.6.0
+git tag -a v26.11.4 -m "DLA 26.11.4"
+git push origin main v26.11.4
 ```
 
 6. Wait for the `release` workflow; then verify the asset:
@@ -101,13 +103,13 @@ git push origin main v3.6.0
 ```bash
 sha256sum -c SHA256SUMS
 apksigner verify --print-certs DLA.apk   # expect f5111725…426c4
-aapt2 dump badging DLA.apk | head -1     # expect versionCode 52 / 3.6.0
+aapt2 dump badging DLA.apk | head -1     # expect versionCode 62 / 26.11.4
 ```
 
 7. Replace the auto-generated English release notes with the Chinese file:
 
 ```bash
-gh release edit v3.6.0 --notes-file docs/release-notes-3.6.0.md --latest
+gh release edit v26.11.4 --notes-file docs/release-notes-26.11.4.md --latest
 ```
 
 ## After publishing

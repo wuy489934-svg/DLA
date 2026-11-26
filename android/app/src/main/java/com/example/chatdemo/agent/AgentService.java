@@ -360,9 +360,17 @@ public class AgentService extends Service {
             case AgentIpc.MSG_START: {
                 String id = data.getString(AgentIpc.KEY_ID);
                 String payload = data.getString(AgentIpc.KEY_PAYLOAD);
+                String payloadFile = data.getString(AgentIpc.KEY_PAYLOAD_FILE);
+                if (payload == null && payloadFile != null) {
+                    payload = readPayloadFile(payloadFile);
+                }
                 if (msg.replyTo != null) clients.add(msg.replyTo);
                 if (id != null && payload != null) {
                     AgentRuntime.get().start(getApplicationContext(), id, payload);
+                    // 运行时已把请求体放进内存（并在需要时写 checkpoint），临时文件可以删了
+                    if (payloadFile != null) {
+                        deleteQuietly(payloadFile);
+                    }
                 }
                 break;
             }
@@ -392,8 +400,46 @@ public class AgentService extends Service {
         }
     }
 
-    private void sendState(Messenger target) {
-        Bundle bundle = new Bundle();
+    /**
+     * 读 UI 进程落盘的大请求体（多图片的 base64 走 Binder 会超 1 MB）。
+     * 读失败返回 null，交给调用方走「参数不是合法 JSON」的既有错误分支。
+     */
+    private String readPayloadFile(String path) {
+        try {
+            java.io.File file = new java.io.File(path);
+            if (!file.isFile()) {
+                Log.w(TAG, "payload file missing: " + path);
+                return null;
+            }
+            byte[] bytes = new byte[(int) file.length()];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+                int offset = 0;
+                while (offset < bytes.length) {
+                    int read = in.read(bytes, offset, bytes.length - offset);
+                    if (read <= 0) break;
+                    offset += read;
+                }
+            }
+            Log.i(TAG, "payload read from file: " + bytes.length + " bytes");
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable error) {
+            Log.w(TAG, "read payload file failed: " + error.getMessage());
+            return null;
+        }
+    }
+
+    private void deleteQuietly(String path) {
+        try {
+            java.io.File file = new java.io.File(path);
+            if (file.isFile() && !file.delete()) {
+                Log.w(TAG, "payload file not deleted: " + path);
+            }
+        } catch (Throwable ignored) {
+            // 删不掉也不影响本轮
+        }
+    }
+
+    private void sendState(Messenger target) {        Bundle bundle = new Bundle();
         bundle.putBoolean(AgentIpc.KEY_RUNNING, AgentRuntime.get().isRunning());
         String current = AgentRuntime.get().currentRequestId();
         if (current != null) bundle.putString(AgentIpc.KEY_REQUEST_ID, current);

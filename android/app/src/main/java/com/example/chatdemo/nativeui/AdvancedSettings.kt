@@ -229,6 +229,31 @@ fun AdvancedSettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    /** 按分区导出：LLM 区 / Agent 区各一个 zip，格式参考 DeepSeek 官方导出 */
+    val exportZone: (String) -> Unit = { zone ->
+        if (!exporting) {
+            exporting = true
+            dataMessageError = false
+            dataMessage = Lang.t("正在导出…")
+            scope.launch {
+                val outcome = withContext(Dispatchers.IO) {
+                    runCatching { SessionExport.exportZone(appContext, zone) }
+                }
+                outcome.fold(
+                    onSuccess = { path ->
+                        dataMessage = Lang.t("已导出到 %s", path)
+                        dataMessageError = false
+                    },
+                    onFailure = { error ->
+                        dataMessage = Lang.t("导出失败：%s", error.message ?: error.javaClass.simpleName)
+                        dataMessageError = true
+                    },
+                )
+                exporting = false
+            }
+        }
+    }
+
     val deleteAllSessions: () -> Unit = {
         if (!deleting) {
             deleting = true
@@ -454,31 +479,54 @@ fun AdvancedSettingsScreen(onBack: () -> Unit) {
                         lineHeight = 16.sp,
                     )
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = exportDiagnostics, enabled = !exporting) {
-                            Text(if (exporting) Lang.t("导出中…") else Lang.t("导出诊断"), fontSize = 12.sp)
+                    // 两行两列：按钮等宽、文字不折行（之前三个按钮挤一行，「导出 Agent 区」被折成三行）
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = exportDiagnostics,
+                            enabled = !exporting,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                if (exporting) Lang.t("导出中…") else Lang.t("导出诊断"),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
                         }
                         OutlinedButton(
-                            onClick = {
-                                scope.launch {
-                                    val outcome = withContext(Dispatchers.IO) {
-                                        runCatching { SessionExport.exportAll(context) }
-                                    }
-                                    dataMessage = outcome.fold(
-                                        onSuccess = { Lang.t("已导出到 %s", it) },
-                                        onFailure = {
-                                            Lang.t("导出失败：%s", it.message ?: it.javaClass.simpleName)
-                                        },
-                                    )
-                                    dataMessageError = outcome.isFailure
-                                }
-                            },
-                        ) { Text(Lang.t("导出历史"), fontSize = 12.sp) }
+                            onClick = { exportZone("llm") },
+                            enabled = !exporting,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(Lang.t("导出 LLM 区"), fontSize = 12.sp, maxLines = 1, softWrap = false)
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { exportZone("agent") },
+                            enabled = !exporting,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(Lang.t("导出 Agent 区"), fontSize = 12.sp, maxLines = 1, softWrap = false)
+                        }
                         OutlinedButton(
                             onClick = { confirmDeleteAll = true },
                             enabled = !deleting,
+                            modifier = Modifier.weight(1f),
                         ) {
-                            Text(Lang.t("删除全部会话"), color = DlaColors.Error, fontSize = 12.sp)
+                            Text(
+                                Lang.t("删除全部会话"),
+                                color = DlaColors.Error,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                            )
                         }
                     }
 

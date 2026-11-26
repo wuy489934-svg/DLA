@@ -19,6 +19,18 @@ class SessionStore(context: Context) {
     private val nativeDir = File(app.filesDir, "native-sessions")
     private val legacyDir = File(app.filesDir, "host-sessions")
 
+    /**
+     * 会话卡缓存。
+     *
+     * 首页/分区页每次导航都会刷新列表，过去每次都把每个会话文件整篇读进来解析
+     * （多图会话单文件能到几 MB），点返回、进分区就会卡一下。
+     * 这里按「文件名 + mtime + 长度」判断有没有变过，没变直接复用上次的结果。
+     */
+    private class CachedCard(val stamp: Long, val length: Long, val card: SessionCard)
+
+    /** 列表刷新在后台线程跑，删除/写入在主线程，用并发 map 避免两边同时改 */
+    private val cardCache = java.util.concurrent.ConcurrentHashMap<String, CachedCard>()
+
     init {
         nativeDir.mkdirs()
         importLegacy()
@@ -36,8 +48,28 @@ class SessionStore(context: Context) {
 
     fun cards(): List<SessionCard> {
         val files = nativeDir.listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: return emptyList()
-        return files.mapNotNull { SessionParser.card(it) }.sortedByDescending { it.updatedAt }
+        val cards = ArrayList<SessionCard>(files.size)
+        val alive = HashSet<String>(files.size)
+        for (file in files) {
+            alive += file.name
+            val stamp = file.lastModified()
+            val length = file.length()
+            val cached = cardCache[file.name]
+            if (cached != null && cached.stamp == stamp && cached.length == length) {
+                cards += cached.card
+                continue
+            }
+            val card = SessionParser.card(file) ?: continue
+            cardCache[file.name] = CachedCard(stamp, length, card)
+            cards += card
+        }
+        // 已删除的会话不留在缓存里
+        cardCache.keys.retainAll(alive)
+        return cards.sortedByDescending { it.updatedAt }
     }
+
+    /** 会话是否存在：只查文件，不解析内容（恢复页面/通知跳转时别为了判断存在去读几 MB 的 JSON） */
+    fun exists(id: String): Boolean = File(nativeDir, "$id.json").isFile
 
     fun detail(id: String): SessionDetail? {
         val file = File(nativeDir, "$id.json")
@@ -83,6 +115,7 @@ class SessionStore(context: Context) {
         val messageCount = json.optJSONArray("messages")?.length() ?: 0
         if (text.isBlank() && messageCount == 0) {
             file.delete()
+            cardCache.remove("$sessionId.json")
             return
         }
         json.put("draft", text)
@@ -261,6 +294,8 @@ class SessionStore(context: Context) {
         usage: UsageStats? = null,
         /** 这一轮的运行 id：界面重启后认领日志时用来去重，避免同一条回答补两次 */
         runId: String? = null,
+        /** 「第几轮 → 那一轮的旁白」：收在执行过程卡里，不进正文气泡 */
+        roundNotes: List<Pair<Int, String>> = emptyList(),
     ) {
         ensure(sessionId, mode)
         val json = read(sessionId) ?: return
@@ -272,9 +307,24 @@ class SessionStore(context: Context) {
                 thinkingByRound[round] = (thinkingByRound[round] ?: "") + section
             }
         }
+        val notesByRound = LinkedHashMap<Int, String>()
+        roundNotes.forEach { (round, note) ->
+            if (note.isNotBlank()) {
+                notesByRound[round] = (notesByRound[round] ?: "") + note
+            }
+        }
         val toolsByRound = tools.groupBy { it.round }
-        val rounds = (thinkingByRound.keys + toolsByRound.keys).sorted()
+        val rounds = (thinkingByRound.keys + toolsByRound.keys + notesByRound.keys).sorted()
         for (round in rounds) {
+            // 旁白在前：先看「模型打算怎么做」，再看思考与工具
+            notesByRound[round]?.takeIf { it.isNotBlank() }?.let { note ->
+                blocks.put(
+                    JSONObject()
+                        .put("type", "round_note")
+                        .put("text", note)
+                        .put("round", round)
+                )
+            }
             thinkingByRound[round]?.takeIf { it.isNotBlank() }?.let { section ->
                 blocks.put(
                     JSONObject()
@@ -364,6 +414,64 @@ class SessionStore(context: Context) {
 
     fun delete(sessionId: String) {
         File(nativeDir, "$sessionId.json").delete()
+        cardCache.remove("$sessionId.json")
+    }
+
+    /**
+     * 运行先被日志认领（回复已落盘）时，用实时运行的数据补上「轮旁白」：
+     * 把旁白从正文块里摘掉，再插到对应轮次的思考/工具块前面。
+     *
+     * 认领与实时收尾存在竞态；没有这一步，旁白会留在气泡里、执行过程卡里却没有。
+     */
+    fun applyRoundNotes(sessionId: String, runId: String, notes: List<Pair<Int, String>>) {
+        if (runId.isBlank() || notes.isEmpty()) return
+        val json = read(sessionId) ?: return
+        val messages = json.optJSONArray("messages") ?: return
+        var target: JSONObject? = null
+        for (i in messages.length() - 1 downTo 0) {
+            val item = messages.optJSONObject(i) ?: continue
+            if (runId == item.optString("runId")) {
+                target = item
+                break
+            }
+        }
+        val message = target ?: return
+        val oldBlocks = message.optJSONArray("blocks") ?: return
+        val cleaned = JSONArray()
+        for (i in 0 until oldBlocks.length()) {
+            val block = oldBlocks.optJSONObject(i) ?: continue
+            if (block.optString("type") == "text") {
+                var body = block.optString("text")
+                notes.forEach { (_, note) -> body = body.replace(note, "") }
+                body = body.trim()
+                if (body.isEmpty()) {
+                    continue
+                }
+                block.put("text", body)
+            }
+            cleaned.put(block)
+        }
+        val notesByRound = notes.toMap()
+        val inserted = HashSet<Int>()
+        val out = JSONArray()
+        for (i in 0 until cleaned.length()) {
+            val block = cleaned.optJSONObject(i) ?: continue
+            val type = block.optString("type")
+            val round = block.optInt("round", 0)
+            if ((type == "thinking" || type == "agent_tool") && round > 0 && inserted.add(round)) {
+                notesByRound[round]?.takeIf { it.isNotBlank() }?.let { note ->
+                    out.put(
+                        JSONObject()
+                            .put("type", "round_note")
+                            .put("text", note)
+                            .put("round", round),
+                    )
+                }
+            }
+            out.put(block)
+        }
+        message.put("blocks", out)
+        write(sessionId, json)
     }
 
     /**
@@ -418,5 +526,7 @@ class SessionStore(context: Context) {
             target.writeText(json.toString())
             temp.delete()
         }
+        // 内容变了：下次 cards() 重新解析这一条
+        cardCache.remove("$sessionId.json")
     }
 }

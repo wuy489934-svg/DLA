@@ -1,6 +1,6 @@
 # 安装与首次配置（Android）
 
-> 3.6.0：原生 Compose 界面是唯一入口；没有网页界面，也不需要 Termux——shell、Python、Node、ripgrep 都在 APK 里。模型接口支持 Anthropic Messages 与 OpenAI Chat Completions 两种协议。
+> 26.11.4：原生 Compose 界面是唯一入口；没有网页界面，也不需要 Termux——shell、Python、Node、ripgrep 都在 APK 里。模型接口支持 Anthropic Messages 与 OpenAI Chat Completions 两种协议。
 
 ## 1. 要求
 

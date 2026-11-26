@@ -37,6 +37,14 @@ public final class AgentClient {
     private static final String TAG = "AgentClient";
     /** attach 同步等待回包的上限；超时返回空串，网页按“暂无回放”处理 */
     private static final long ATTACH_TIMEOUT_MS = 600L;
+    /**
+     * 请求体超过这个字符数就改走文件。
+     *
+     * Binder 一次事务只有 ~1 MB，且 Parcel 写字符串按 UTF-16（2 字节/字符），
+     * 所以 12 万字符已经接近 240 KB，留足余量；图片 base64 单张就有 30 万字符左右，
+     * 两张就会撞上限——这正是「多图空转」的根。
+     */
+    private static final int INLINE_PAYLOAD_LIMIT = 120_000;
 
     public interface Listener {
         void onEvent(String requestId, JSONObject event);
@@ -147,10 +155,56 @@ public final class AgentClient {
         connect(context);
         Bundle data = new Bundle();
         data.putString(AgentIpc.KEY_ID, id);
-        data.putString(AgentIpc.KEY_PAYLOAD, payloadJson);
+        // 小请求直接过 Binder；带图片的大请求先落盘，只传路径（详见 AgentIpc.KEY_PAYLOAD_FILE）
+        String inline = payloadJson;
+        if (payloadJson != null && payloadJson.length() > INLINE_PAYLOAD_LIMIT) {
+            String path = spillPayload(context, id, payloadJson);
+            if (path != null) {
+                data.putString(AgentIpc.KEY_PAYLOAD_FILE, path);
+                inline = null;
+            }
+        }
+        if (inline != null) {
+            data.putString(AgentIpc.KEY_PAYLOAD, inline);
+        }
         requestId = id;
         running = true;
-        send(AgentIpc.MSG_START, data);
+        if (!send(AgentIpc.MSG_START, data)) {
+            notifyFailure(id, "Agent 进程没有接收这次请求（请求体过大或进程不可用）。"
+                    + "请减少图片/附件后重试。");
+        }
+    }
+
+    /** 私有 files 目录里的临时请求体：两个进程同 UID，:agent 直接读得到 */
+    private String spillPayload(Context context, String id, String payloadJson) {
+        if (context == null) return null;
+        try {
+            java.io.File dir = new java.io.File(
+                    context.getApplicationContext().getFilesDir(), "agent-payload");
+            if (!dir.isDirectory() && !dir.mkdirs()) return null;
+            prune(dir);
+            java.io.File file = new java.io.File(dir, id + ".json");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+                out.write(payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                out.flush();
+            }
+            Log.i(TAG, "payload spilled to file: " + payloadJson.length() + " chars");
+            return file.getAbsolutePath();
+        } catch (Throwable error) {
+            Log.w(TAG, "spill payload failed: " + error.getMessage());
+            return null;
+        }
+    }
+
+    /** 只留最近几个请求体，避免目录无限长（每个可能几 MB） */
+    private void prune(java.io.File dir) {
+        java.io.File[] files = dir.listFiles();
+        if (files == null || files.length < 6) return;
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        for (int i = 0; i < files.length - 4; i++) {
+            //noinspection ResultOfMethodCallIgnored
+            files[i].delete();
+        }
     }
 
     public void stop(String id) {
@@ -210,7 +264,7 @@ public final class AgentClient {
         }
     }
 
-    private void send(int what, Bundle data) {
+    private boolean send(int what, Bundle data) {
         Message message = Message.obtain(null, what);
         message.setData(data);
         message.replyTo = incoming;
@@ -221,14 +275,41 @@ public final class AgentClient {
                 pending.addLast(message);
             }
             connect(appContext);
-            return;
+            return true;
         }
         try {
             target.send(message);
-        } catch (RemoteException exception) {
+            return true;
+        } catch (Throwable exception) {
+            // TransactionTooLargeException / DeadObjectException 都是 RemoteException 子类；
+            // 以前只 catch RemoteException 后静默置空 remote，界面就永远等不到任何事件。
             remote = null;
-            Log.w(TAG, "send failed: " + exception.getMessage());
+            Log.w(TAG, "send failed: " + exception);
+            return false;
         }
+    }
+
+    /** Binder 发不出去时补一条本地 error 事件，界面才不会一直「生成中」 */
+    private void notifyFailure(String id, String message) {
+        running = false;
+        JSONObject event = new JSONObject();
+        try {
+            event.put("type", "error");
+            event.put("message", message);
+            event.put("requestId", id);
+        } catch (Exception ignored) {
+            // 不会发生
+        }
+        final JSONObject payload = event;
+        main.post(() -> {
+            for (Listener listener : listeners) {
+                try {
+                    listener.onEvent(id, payload);
+                } catch (Throwable throwable) {
+                    Log.w(TAG, "listener failed: " + throwable.getMessage());
+                }
+            }
+        });
     }
 
     private void flush() {
@@ -241,8 +322,15 @@ public final class AgentClient {
                 message.replyTo = incoming;
                 try {
                     target.send(message);
-                } catch (RemoteException exception) {
-                    pending.addFirst(message);
+                } catch (Throwable exception) {
+                    remote = null;
+                    String id = message.getData() == null
+                            ? null : message.getData().getString(AgentIpc.KEY_ID);
+                    Log.w(TAG, "flush failed: " + exception);
+                    if (message.what == AgentIpc.MSG_START && id != null) {
+                        notifyFailure(id, "Agent 进程没有接收这次请求（请求体过大或进程不可用）。"
+                                + "请减少图片/附件后重试。");
+                    }
                     break;
                 }
             }

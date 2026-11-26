@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="CHANGELOG.md"><img alt="version 3.6.0" src="https://img.shields.io/badge/version-3.6.0-7FE7C4" /></a>
+  <a href="CHANGELOG.md"><img alt="version 26.11.4" src="https://img.shields.io/badge/version-26.11.4-7FE7C4" /></a>
   <a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-7FE7C4" /></a>
   <img alt="Android 10+ arm64" src="https://img.shields.io/badge/Android-10%2B%20arm64-7FE7C4" />
   <img alt="local-first, no telemetry" src="https://img.shields.io/badge/local--first-no%20telemetry-7FE7C4" />
@@ -22,7 +22,7 @@
 > **先澄清一个常见误会：DLA 不使用 Termux。**
 >
 > 2.2（2026-11-23）已经把 Termux 集成**整体删除**——不是“可选项”，也不是“可选后端”。当前版本没有 `termux` 工具、没有 RUN_COMMAND、没有 Termux 设置面板，也不依赖 Termux 才能启动。APK 自带 Android toybox shell、CPython 3.12、Node 24 与 ripgrep；可选增强只有 **Shizuku**（`pm / am / settings` 等特权命令）和**无障碍服务**（读屏 / 点按）。
-> 仓库里 1.4.x / 2.x 的 CHANGELOG 提到 Termux，只是历史记录；**3.5.0 与 3.6.0 的更新都与 Termux 无关**。
+> 仓库里 1.4.x / 2.x 的 CHANGELOG 提到 Termux，只是历史记录；**3.5.0 之后的版本（3.6.0 / 26.11.4）都不涉及 Termux**。
 
 <a id="toc"></a>
 
@@ -36,7 +36,7 @@
 - [LLM 区：有记忆、有人设的对话者](#llm)
 - [Agent 区：能动手、也会自检的手机 Agent](#agent)
 - [真机产物：Agent 自己做出来的东西](#outputs)
-- [3.6.0 更新](#whatsnew)
+- [26.11.4 更新](#whatsnew)
 - [它能做什么](#scenarios)
 - [安装与快速开始](#install)
 - [常见问题 FAQ](#faq)
@@ -343,27 +343,57 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 
 <a id="whatsnew"></a>
 
-## 3.6.0 更新
+## 26.11.4 更新
 
-3.6.0 在 3.5.0 的基础上，把“长任务能不能持续思考”做完，并把执行过程收成一张卡：
+26.11.4 是 3.6.0 之后的第一次公开发布，中间跨过 3.6.0fix–26.11.3 十个开发版。一句话：**模型与思考收成一个入口，联网接到 DeepSeek 官方通道，Agent 的过程叙述归入执行过程卡，手机工具补到「一类任务一个工具」。** 版本体系也从 3.6.x 换成 **26.11.x**（26 = 2026 年，11 = 11 月，末位是当月第几个迭代；`versionCode` 继续单调递增）。
 
-### 1）思考 → 调用 → 思考
+### 1）模型 · 思考强度：一个入口管两个区
 
-- 看门狗触发时**只让这一轮直接执行**，下一轮自动恢复思考，不再把整个任务的思考永久关掉。
-- 被截断的思考取尾巴接回重试提示，不从头再想。
-- 连续想过头时本轮预算 12K → 6K → 3K 收紧，成功执行一轮立刻恢复。
-- 同一轮重试不消耗轮数；`max_tokens` 只烧出思考时也走同样的恢复路径。
-- **修掉 DeepSeek / Anthropic 的 thinking 回传要求**：assistant 消息带回 thinking 块（含 signature），截断重试时补回中止前的思考，否则下一轮 400。
+- 聊天页标题下方新增「模型 · 思考强度」胶囊（自绘表盘图标），LLM / Agent 两区都有，颜色随分区：LLM 琥珀、Agent 薄荷。
+- 点开是同一个对话框：模型名 + 已缓存模型（单列可滚动，全部可选）+ 思考强度三档（低 ≈2048 / 中 ≈4096 / 高 ≈8192 tokens），应用后两个区共用。
+- DeepSeek 端点的思考档位仍由官方控制，不强行塞 `budget_tokens`。
 
-### 2）执行过程大卡
+### 2）联网：DeepSeek 官方搜索 / 抓取（可选付费通道）
 
-- 所有“第 N 轮”的思考与工具收进一张可折叠大卡，放在迭代树下方。
-- 运行中默认展开，任务结束自动折叠；点标题随时展开/收起。
-- 迭代树与执行过程轮数口径统一：有思考没工具的轮也算一轮。
+- 设置 → 对话新增「DeepSeek 官方搜索 Key（可选）」：填一个官方 Key，搜索/抓取就走 DeepSeek 官方接口，**与聊天用哪家模型无关**。
+- `web_search` 优先走官方 `POST /v1/tools/search`；`web_fetch` 优先走官方 `POST /v1/tools/fetch`（直接返回 Markdown 正文），失败回退免费后端与原生抓取。
+- 新增「测试官方 Key」自检：只回报命中条数与首条标题，不回显 Key；Key 输入是密码框，可显示 / 隐藏。
+- 免费后端也重做了：多后端合并去重 + 相关性排序 + 垃圾结果过滤，`web_research` 一次返回搜索结果与前几页正文。
 
-### 3）状态条重排
+### 3）执行过程卡：轮旁白也收进去
 
-- 缓存命中率与本轮耗时单独一行（12sp），放在上下文占用上方，不再和十段虚线挤一行。
+- Agent 区带工具调用的轮次里，模型的过程叙述不再混在正文气泡，而是收进「执行过程」卡，显示在该轮思考卡与工具卡上方：淡色小字「旁白 · …」（长按可复制）。
+- 正文气泡只剩最终总结；消息模型新增 `round_note` 块（`{"type":"round_note","text":…,"round":N}`），排在该轮思考与工具之前落盘。
+- LLM 区继续保持「过程叙述不进气泡」（工具轮的文本只进上下文）——两边口径一致：回答是回答，过程是过程。
+
+### 4）工具广度：一类任务一个工具
+
+| 新工具 | 一次调用能做完的事 |
+|---|---|
+| `phone_media` | 读时长/分辨率/码率/音轨；抽任意时刻一帧；按毫秒**无损剪**、去音轨（不重编码） |
+| `phone_record` | Shizuku 后台录屏，SIGINT 落盘 MP4 |
+| `phone_image` | 按宽/高/百分比缩放、转 jpeg/png/webp、可回传图片自检 |
+| `phone_share` | 复制到 cache + FileProvider 授权 → 系统分享面板 |
+| `phone_http` | GET/POST/PUT/PATCH/DELETE，自定义头与 body，响应可存文件 |
+| `phone_zip_create` | 文件/目录递归打包 zip，条目保留相对路径 |
+| `web_research` | 搜索 + 读前几页正文一次完成 |
+
+动画 / 视频类任务的路径也写进了工具提示：HTML/Canvas 播放 → `phone_record` 录屏 → `phone_media` 剪/去音轨 → `phone_share`，不要再去找 ffmpeg。
+
+### 5）两个区的对话体验
+
+- **LLM 区能自己联网**：非 DeepSeek 模型也走 function calling 调 `web_search` / `web_fetch`（最多 4 轮），不再靠「把整句用户消息当搜索词」预注入。
+- **Qwen 关了思考不再“偷偷想”**：`enable_thinking` 改为无条件下发布尔值（false 也发）；Qwen 端点不回缓存字段时显示「缓存 —」，不再显示假的 0%。
+- **身份纠偏**：Qwen / GPT / GLM 等非 DeepSeek 端点拿到中性身份提示，不再自称 DeepSeek。
+- 其他：Agent 注入防护、分区导出 zip、列表缓存 + 后台刷新（点击不卡）、多图空转修复、文件绝对路径搜索、输入框聚焦修复、导出四个按钮两行两列不再折行、执行过程换成自绘放大镜图标、迭代树流式时不再自己收起。
+
+### 3.6.0 底座（仍全部有效）
+
+3.6.0 把「长任务能不能持续思考」做完，并把执行过程收成一张卡：
+
+- **思考 → 调用 → 思考**：看门狗只让这一轮直接执行、下一轮恢复思考；截断的思考尾巴接回重试提示；预算 12K → 6K → 3K 自适应；同一轮重试不消耗轮数；`max_tokens` 只烧出思考时走同样恢复路径。
+- **thinking 块回传**：assistant 消息带回 thinking 块（含 signature），截断重试时补回中止前的思考，满足 DeepSeek / Anthropic 的硬要求。
+- **执行过程大卡 + 状态条**：所有「第 N 轮」收进一张可折叠大卡（运行中展开、结束折叠）；缓存命中率与本轮耗时单独一行。
 
 ![3.6.0 真机：任务结束后的执行过程大卡与状态条](docs/assets/screenshot-process.png)
 
@@ -372,7 +402,7 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 
 ### 3.5.0 打下的底子
 
-3.5.0 是上一次公开发布：双协议 + `ProviderCompat`（12 预设 / 自动识别 / 各家 compat）、拉取后挑模型、原生 `web_fetch` + 免费搜索链、`agent-runs` 记账与重启认领、参数截断自愈、长输出自动续写、`phone_web_shot` 离屏自检、`[工具 · 身份]` 标签、真页面栈、破碎动效 + 独立线程音效、任务通知 `agent-result-v2`、前台完成音。3.6.0 没有推翻这些，只是把长任务思考与执行过程可见性补齐。
+3.5.0 是更早的公开版本：双协议 + `ProviderCompat`（12 预设 / 自动识别 / 各家 compat）、拉取后挑模型、原生 `web_fetch` + 免费搜索链、`agent-runs` 记账与重启认领、参数截断自愈、长输出自动续写、`phone_web_shot` 离屏自检、`[工具 · 身份]` 标签、真页面栈、破碎动效 + 独立线程音效、任务通知 `agent-result-v2`、前台完成音。3.6.0 没有推翻这些，只是把长任务思考与执行过程可见性补齐。
 
 ![通知与朗读设置](docs/assets/screenshot-notify.png)
 
@@ -466,7 +496,8 @@ DLA 会根据本轮思考长度自适应：超过预算就中止这一轮、关�
 
 | 版本 | 发布 | 主要内容 |
 |---|---|---|
-| **v3.6.0** | 2026-11-25 | 长任务“思考 → 调用 → 思考”（只降本轮 / 思考尾巴续接 / 预算自适应）、thinking 块回传修复、执行过程大卡、状态条重排 |
+| **v26.11.4** | 2026-11-26 | 模型·思考强度统一入口、DeepSeek 官方搜索/抓取（可选 Key + 自检）、Agent 轮旁白归入执行过程卡、工具广度（媒体/录屏/图片/HTTP/分享/zip/web_research）、LLM 区自主联网、Qwen 思考开关与缓存读数纠偏、版本体系切到 26.11.x |
+| v3.6.0 | 2026-11-25 | 长任务“思考 → 调用 → 思考”（只降本轮 / 思考尾巴续接 / 预算自适应）、thinking 块回传修复、执行过程大卡、状态条重排 |
 | v3.5.0 | 2026-11-24 | 双协议 + `ProviderCompat`（12 预设 / 自动识别 / 各家 compat）、拉取后挑模型、`agent-runs` 记账与重启认领、参数截断自愈、长输出自动续写、`phone_web_shot` 离屏自检、原生 `web_fetch` + 免费搜索链、`[工具 · 身份]` 标签、破碎动效 + 独立线程音效、任务通知、前台完成音、真页面栈 |
 | v3.1.2 | 2026-11-24 | Agent 调用指南（身份 / 证据 / 先测再断言）、运行时能力注入、上下文用量条、单轮耗时、双分区首页、120 轮上限 |
 | v3.0 | 2026-11-23 | 设置页卡片化、朗读只对接 Qwen3-TTS、朗读默认关闭 |
@@ -475,10 +506,13 @@ DLA 会根据本轮思考长度自适应：超过预算就中止这一轮、关�
 | v1.4.1 | 2026-11-22 | 早期版本（当时使用 Termux 后端；**该后端已在 2.2 移除**）、工具按需发现、原创图标与文档 |
 | v1.3.0 | 2026-11-22 | 首个公开版本（Apache-2.0） |
 
-### 开发版（功能已全部合入 3.6.0，未单独发布）
+### 开发版（功能已全部合入 26.11.4，未单独发布）
 
 | 版本 | 主要内容 | 状态 |
 |---|---|---|
+| 26.11.3 / 26.11.2 / 26.11.1 | 模型选择可滚动、官方 Search/Fetch 补齐与自检、Key 掩码、模型·思考统一入口、LLM 区非正文不进气泡、Qwen 思考开关纠偏、执行过程图标、迭代树展开修复 | 已合入 26.11.4 |
+| 3.6.5 / 3.6.4 / 3.6.3 | LLM 区自主工具调用、LLM 区身份纠偏、工具广度（媒体/录屏/图片/HTTP/分享/zip）、联网搜索跨模型可用、导出排版、缓存「—」、输入聚焦 | 已合入 26.11.4 |
+| 3.6.2 / 3.6.1fix / 3.6.1 / 3.6.0fix | 点击不卡（列表缓存 + 后台刷新）、分区导出 zip、Agent 注入防护、中文文本入口、多图空转修复、附件入口三合一、文件绝对路径搜索、LLM 区去缓存提示 + Agent 区缓存实时化 | 已合入 26.11.4 |
 | 3.5.2 | 思考看门狗、缓存友好裁剪（长任务实测 90%+）、LLM 区联网搜索过程可见 | 已合入 3.6.0 |
 | 3.5.1 | 思考卡按轮拆分、整对话缓存命中率、LLM 区编辑最后一条用户消息并重答 | 已合入 3.6.0 |
 | 3.5.0fix | DeepSeek 协议下 Agent 思考卡、null 墙与错误提示、百炼 token-plan 地址、OpenAI 方言工具截图、保存 Toast 与设置页刷新 | 已合入 3.6.0 |
@@ -501,7 +535,7 @@ DLA 会根据本轮思考长度自适应：超过预算就中止这一轮、关�
 
 ## 这个工程是怎么用 DSH 做出来的
 
-DLA 的开发全程在 **DeepSeek Harness（DSH）** 里进行。DSH 是命令行式的 AI 编程代理：给它一个任务，它自己读代码、改文件、跑构建、连手机验证，再把结果交回来。这个仓库从 1.3 到 3.6.0 的改动，都是这样一轮一轮跑出来的。
+DLA 的开发全程在 **DeepSeek Harness（DSH）** 里进行。DSH 是命令行式的 AI 编程代理：给它一个任务，它自己读代码、改文件、跑构建、连手机验证，再把结果交回来。这个仓库从 1.3 到 26.11.4 的改动，都是这样一轮一轮跑出来的。
 
 | 环节 | DSH 的工具 / 场景 | 大致占比 |
 |---|---|---|
@@ -541,7 +575,7 @@ cd android
 ./gradlew assembleRelease   # 需要 ../keystore/keystore.properties 才会签名
 ```
 
-版本号由 `-PdlaVersionCode=` / `-PdlaVersionName=` 控制（本仓库默认 **52 / 3.6.0**，CI 不带参数，默认值即发布值）。构建细节、CI 与发布流程见 [`BUILD.md`](BUILD.md) 与 [`RELEASING.md`](RELEASING.md)。
+版本号由 `-PdlaVersionCode=` / `-PdlaVersionName=` 控制（本仓库默认 **62 / 26.11.4**，CI 不带参数，默认值即发布值）。构建细节、CI 与发布流程见 [`BUILD.md`](BUILD.md) 与 [`RELEASING.md`](RELEASING.md)。
 
 ### 许可与素材
 
@@ -580,6 +614,6 @@ cd android
 
 **DLA (DeepSeek LLM Agent)** is an unofficial, **local-first Android agent** built around two **equal** halves. The **LLM area** is a configurable AI companion / role-play partner: a 10-field persona, AI persona completion, picture-to-character analysis, portrait injection that never overrides the written persona, and speech through the system TTS engine or Alibaba Qwen3-TTS. The **Agent area** is a real **phone agent**: it reads the screen through Accessibility, taps and types, runs a bundled shell, Python and Node, reads and writes files, queries apps and device state, fetches web pages natively and searches the web, and **renders local HTML off-screen and screenshots it** so the model can inspect and fix its own output. The APK bundles Android toybox, CPython 3.12 (Chaquopy), Node.js 24 and ripgrep, so it needs neither Termux nor root; **Termux support was removed entirely in 2.2 and is not an optional backend**. Shizuku is optional for `pm` / `am` / `settings`.
 
-**3.6.0** keeps the agent thinking round after round: the watchdog only downgrades the current round (the next round thinks again), the truncated reasoning tail is fed back into the retry, the per-round thinking budget tightens 12K → 6K → 3K characters under repeated overruns, and thinking blocks (with signatures) are passed back in assistant messages as the Anthropic/DeepSeek API requires. The UI collects every “round N” into one collapsible **Process** card below the iteration tree (expanded while running, collapsed when done), and the status bar now shows cache hit rate and turn time on their own line above the context bar. **3.5.0** is the previous public release: Anthropic / OpenAI dual protocol with the `ProviderCompat` adapter (12 presets, auto-detection, per-provider quirks), a model picker after `fetch models`, native `web_fetch` plus free search backends with diagnostics for `web_search`, a run journal (`files/agent-runs`) that recovers answers after the UI process is killed, truncation self-healing, automatic continuation, `[tool · identity]` labels, a real back stack, a shatter tap effect, task notifications on `agent-result-v2`, and a 0.35 s completion chime on media volume.
+**26.11.4** is the first public release since 3.6.0: one Model / Thinking pill now serves both areas (model name plus low / medium / high thinking levels), DeepSeek's official `tools/search` and `tools/fetch` can be enabled with an optional key (with a self-test that never echoes it), and the agent's per-round narration moved out of the reply bubble into the Process card as `round_note` blocks. The tool set grew a whole task per tool — `phone_media` (info / frame / lossless trim / mute), `phone_record`, `phone_image`, `phone_share`, `phone_http`, `phone_zip_create` and `web_research` — and the LLM area now calls `web_search` / `web_fetch` itself on non-DeepSeek providers. Qwen no longer thinks when thinking is off (`enable_thinking` is always sent) and reports “cache —” instead of a fake 0%. Versioning switched to 26.11.x (year.month.iteration; versionCode keeps increasing). **3.6.0** keeps the agent thinking round after round: the watchdog only downgrades the current round (the next round thinks again), the truncated reasoning tail is fed back into the retry, the per-round thinking budget tightens 12K → 6K → 3K characters under repeated overruns, and thinking blocks (with signatures) are passed back in assistant messages as the Anthropic/DeepSeek API requires. The UI collects every “round N” into one collapsible **Process** card below the iteration tree (expanded while running, collapsed when done), and the status bar now shows cache hit rate and turn time on their own line above the context bar. **3.5.0** is the previous public release: Anthropic / OpenAI dual protocol with the `ProviderCompat` adapter (12 presets, auto-detection, per-provider quirks), a model picker after `fetch models`, native `web_fetch` plus free search backends with diagnostics for `web_search`, a run journal (`files/agent-runs`) that recovers answers after the UI process is killed, truncation self-healing, automatic continuation, `[tool · identity]` labels, a real back stack, a shatter tap effect, task notifications on `agent-result-v2`, and a 0.35 s completion chime on media volume.
 
 No account, no telemetry, no relay server: chats, personas, attachments, run journals and settings stay on the device, and model calls go straight to the endpoint you configure. Arm64 devices only, Android 10+. **Fully open source under Apache-2.0**; the published APK is built from this repository by GitHub Actions, with `SHA256SUMS` for verification. See `docs/AGENT-RUNTIME.md`, `docs/ARCHITECTURE.md` and `BUILD.md`.

@@ -49,8 +49,8 @@ publishes, so keep them in sync with the release:
 
 | Property | Default | Meaning |
 |---|---|---|
-| `-PdlaVersionCode` | `52` | `versionCode` |
-| `-PdlaVersionName` | `3.6.0` | `versionName` |
+| `-PdlaVersionCode` | `62` | `versionCode` |
+| `-PdlaVersionName` | `26.11.4` | `versionName` |
 | `-PappId` | `com.example.chatdemo` | `applicationId` |
 | `-PdlaPythonVersion` | `3.12` | Chaquopy Python version; must match `chaquopy.version` major.minor |
 | `-PdlaBuildPython` | unset (or `DLA_BUILD_PYTHON`) | build-machine interpreter used to compile pyc |
@@ -63,7 +63,7 @@ Examples:
 ./gradlew assembleRelease \
   -PdlaBuildPython=/path/to/python3.12 \
   -PappId=com.example.chatdemo.local \
-  -PdlaVersionCode=99 -PdlaVersionName=3.6.0-local
+  -PdlaVersionCode=99 -PdlaVersionName=26.11.4-local
 
 # a release build signed with the local Android debug key
 ./gradlew assembleRelease -PperfSign=true
@@ -107,4 +107,4 @@ aapt2 dump badging app-release.apk | head
 apksigner verify --print-certs app-release.apk
 ```
 
-Expected for a published build: `com.example.chatdemo`, `versionCode 52`, `versionName 3.6.0`, signed with the release key.
+Expected for a published build: `com.example.chatdemo`, `versionCode 62`, `versionName 26.11.4`, signed with the release key.

@@ -25,6 +25,8 @@ public final class AgentRuntime {
     }
 
     private static final int MAX_BUFFER = 2000;
+    /** 超过这个字符数的请求体不写恢复用 checkpoint（多图请求，加密+落盘会卡住服务主线程） */
+    private static final int MAX_CHECKPOINT_CHARS = 2_000_000;
     private static final AgentRuntime INSTANCE = new AgentRuntime();
 
     public static AgentRuntime get() {
@@ -88,7 +90,14 @@ public final class AgentRuntime {
         if (!payload.optBoolean("resumeTaskState", false)) {
             AgentCheckpoint.clearTaskState(appContext);
         }
-        AgentCheckpoint.save(appContext, id, payloadJson);
+        // 带图片的请求体可能几 MB：checkpoint 要在服务主线程做 AES-GCM + base64 + commit，
+        // 大请求直接跳过落盘（恢复时也带不回图片），换来的是「点了发送马上开始跑」。
+        if (payloadJson.length() <= MAX_CHECKPOINT_CHARS) {
+            AgentCheckpoint.save(appContext, id, payloadJson);
+        } else {
+            android.util.Log.i("AgentRuntime",
+                    "skip checkpoint: payload too large (" + payloadJson.length() + " chars)");
+        }
         // 有会话 id 才值得记账：这样界面即使中途被杀，回来也能把这轮补回来
         if (!payload.optString("sessionId", "").isEmpty()) {
             journal = AgentRunJournal.begin(context, id, payload);
@@ -103,6 +112,10 @@ public final class AgentRuntime {
             finish();
             return;
         }
+        // 明确告诉界面「:agent 已经接单」。
+        // 之前没有任何「开始」信号：请求在 Binder 就被拦下时，界面以为任务在跑，
+        // 于是一直「生成中」、既不思考也不回复——用户看到的就是空转。
+        emitNow(id, startEvent());
         touchWakeLock(context);
         runner = new AgentRunner(context, payload, event -> emit(id, event));
         worker = new Thread(() -> {
@@ -430,6 +443,16 @@ public final class AgentRuntime {
         } catch (Throwable ignored) {
             // 忽略
         }
+    }
+
+    private static JSONObject startEvent() {
+        JSONObject event = new JSONObject();
+        try {
+            event.put("type", "start");
+        } catch (Exception ignored) {
+            // 不会发生
+        }
+        return event;
     }
 
     private static JSONObject errorEvent(String message) {

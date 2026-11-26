@@ -128,8 +128,8 @@ object Lang {
         // ---- 会话列表 / 首页 ----
         "本地智能体 · 原生界面" to "Local agent · Native UI",
         "今天想让我做什么？" to "What would you like me to do today?",
-        "本地运行 · 模型来自 DeepSeek · 数据不出手机" to
-            "Runs locally · Powered by DeepSeek · Data stays on your phone",
+        "本地运行 · 模型由你接入 · 数据不出手机" to
+            "Runs locally · Your own model · Data stays on your phone",
         "LLM 对话" to "LLM Chat",
         "纯聊天与检索" to "Chat and search",
         "Agent 任务" to "Agent Task",
@@ -307,8 +307,8 @@ object Lang {
             "Persona and portrait apply to LLM chat only; mirror mode overrides a custom persona.",
         "更多" to "More",
         "运行环境 / MCP / 数据" to "Runtime / MCP / Data",
-        "DLA · 本地智能体\n模型来自 DeepSeek，非官方产品。\n数据只存在本机。" to
-            "DLA · Local agent\nPowered by DeepSeek, not an official product.\nAll data stays on this device.",
+        "DLA · 本地智能体\n模型由你接入，非官方产品。\n数据只存在本机。" to
+            "DLA · Local agent\nYour own model, not an official product.\nAll data stays on this device.",
 
         // ---- 高级设置：MCP ----
         "高级设置" to "Advanced settings",
@@ -349,6 +349,9 @@ object Lang {
         "导出中…" to "Exporting…",
         "导出诊断" to "Export diagnostics",
         "导出历史" to "Export history",
+        "正在导出…" to "Exporting…",
+        "导出 LLM 区" to "Export LLM chat",
+        "导出 Agent 区" to "Export Agent runs",
         "已导出到 %s" to "Exported to %s",
         "导出失败：%s" to "Export failed: %s",
         "删除全部会话" to "Delete all sessions",

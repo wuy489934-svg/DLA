@@ -2,11 +2,23 @@
 
 > **Termux note / Termux 状态（先读这条）**：Termux support was **removed entirely in 2.2**
 > and is **not** an optional backend — there is no `termux` tool, no RUN_COMMAND, no
-> Termux panel. The 3.5.0 and 3.6.0 releases do not touch Termux. Entries below that
+> Termux panel. The 3.5.0 and later releases (3.6.0 / 26.11.4) do not touch Termux. Entries below that
 > mention Termux (1.4.x / 2.x) are kept for history only.
 >
-> **Termux 集成已在 2.2 整体删除，不是可选后端**；3.5.0 / 3.6.0 的更新与 Termux 无关。
+> **Termux 集成已在 2.2 整体删除，不是可选后端**；3.5.0 之后的版本（3.6.0 / 26.11.4）都与 Termux 无关。
 > 下文 1.4.x / 2.x 的 Termux 条目只是历史记录。
+
+## 26.11.4
+
+- **Versioning switched to 26.11.x.** Releases now follow `year.month.iteration` (26.11.4 = 2026, November, 4th iteration) while `versionCode` keeps increasing monotonically (3.6.0 = 52 → 26.11.4 = 62); same package, same signing key, no uninstall needed.
+- **One Model / Thinking pill for both areas.** A self-drawn dial pill under the chat title serves the LLM and Agent areas: model name, every cached model in a scrollable list, and three thinking levels (≈2048 / 4096 / 8192 tokens). The same preference is read by both areas; DeepSeek's own thinking levels stay under the provider's control.
+- **DeepSeek official search and fetch (optional paid channel).** A dedicated "DeepSeek official search key" in Settings makes `web_search` call `/v1/tools/search` and `web_fetch` call `/v1/tools/fetch` (Markdown body) regardless of which provider the chat itself uses, falling back to the free backends and native fetch on failure. A "test official key" self-check reports only hit count and the first title; the key field is a password box with show/hide.
+- **Per-round narration moves into the Process card.** On rounds that call tools, the agent's narration is no longer mixed into the reply bubble: it is stored as a `round_note` block and rendered as dim "旁白 · …" text above that round's thinking and tool cards. The reply bubble keeps only the final answer. When the `:agent` log has already claimed the message, the finishing side rewrites it so the narration lands in the right round either way.
+- **Tool breadth: one tool per task class.** `phone_media` (probe / frame / millisecond-accurate lossless trim / mute), `phone_record` (Shizuku-backed screen recording), `phone_image` (resize / convert / rotate), `phone_share` (system share sheet), `phone_http` (all common verbs, custom headers/body, save-to-file), `phone_zip_create` (recursive zip) and `web_research` (search + read the top pages in one call). The tool guidance now spells out the animation/video path: HTML/Canvas → record → lossless trim → share; no ffmpeg.
+- **The LLM area calls web tools itself.** On non-DeepSeek providers it now uses function calling for `web_search` / `web_fetch` (max 4 rounds) instead of pre-injecting the user message as a search query; tool-round text stays in the context and out of the bubble, with a "say continue" fallback when the round budget is used up.
+- **Qwen thinking and honest cache readout.** `enable_thinking` is now always sent (including `false`) so hybrid thinking models stop thinking when the switch is off; when an endpoint reports no cache fields the status bar shows "缓存 —" instead of a fake 0%. Non-DeepSeek endpoints also get a neutral identity prompt instead of claiming to be DeepSeek.
+- **UI and reliability.** Agent prompt-injection guard, per-area zip export, cached lists plus background refresh (no more janky taps), multi-image no-op fix, absolute-path file search, input focus fix, two-by-two export buttons, a self-drawn magnifier for the Process card, and an iteration tree that no longer collapses itself while streaming.
+- **No Termux changes.** Termux was removed in 2.2 and is still not an optional backend.
 
 ## 3.6.0
 
