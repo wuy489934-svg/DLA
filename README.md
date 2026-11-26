@@ -289,7 +289,7 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 
 ![LLM 区](docs/assets/screenshot-llm.png)
 
-<p align="center"><sub>LLM 区：暖色标识、深度思考 / 联网搜索快捷开关，思考过程可展开，会话与 Agent 区完全隔离</sub></p>
+<p align="center"><sub>LLM 区（开源版 26.11.4）：琥珀色标识、模型 · 思考强度胶囊、深度思考 / 联网搜索快捷开关；左下角是拍照 / 图片 / 文件三个附件入口，会话与 Agent 区完全隔离</sub></p>
 
 ![角色设定与朗读](docs/assets/screenshot-persona.png)
 
@@ -317,7 +317,7 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 
 ![工具卡展开：执行身份、参数与结果](docs/assets/screenshot-tool.png)
 
-<p align="center"><sub>工具卡展开：结果面板顶部就是 `[phone_sh · 应用身份]`、退出码、耗时与工作目录</sub></p>
+<p align="center"><sub>26.11.4 真机（开源版）：工具卡展开能看到执行身份、参数与结果——顶部写「身份：应用身份（无特权）」，结果面板带 `[phone_sh · 应用身份]`、退出码、耗时与工作目录。</sub></p>
 
 <a id="outputs"></a>
 
@@ -353,6 +353,10 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 - 点开是同一个对话框：模型名 + 已缓存模型（单列可滚动，全部可选）+ 思考强度三档（低 ≈2048 / 中 ≈4096 / 高 ≈8192 tokens），应用后两个区共用。
 - DeepSeek 端点的思考档位仍由官方控制，不强行塞 `budget_tokens`。
 
+![26.11.4 真机：模型与思考强度对话框](docs/assets/screenshot-model.png)
+
+<p align="center"><sub>26.11.4 真机（开源版）：一个表盘胶囊管两个区；模型名、已缓存模型（可滚动）、低 / 中 / 高三档都在同一个对话框里，琥珀色是 LLM 区。</sub></p>
+
 ### 2）联网：DeepSeek 官方搜索 / 抓取（可选付费通道）
 
 - 设置 → 对话新增「DeepSeek 官方搜索 Key（可选）」：填一个官方 Key，搜索/抓取就走 DeepSeek 官方接口，**与聊天用哪家模型无关**。
@@ -365,6 +369,10 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 - Agent 区带工具调用的轮次里，模型的过程叙述不再混在正文气泡，而是收进「执行过程」卡，显示在该轮思考卡与工具卡上方：淡色小字「旁白 · …」（长按可复制）。
 - 正文气泡只剩最终总结；消息模型新增 `round_note` 块（`{"type":"round_note","text":…,"round":N}`），排在该轮思考与工具之前落盘。
 - LLM 区继续保持「过程叙述不进气泡」（工具轮的文本只进上下文）——两边口径一致：回答是回答，过程是过程。
+
+![26.11.4 真机：执行过程卡里的轮旁白、思考与工具](docs/assets/screenshot-process.png)
+
+<p align="center"><sub>26.11.4 真机（开源版）：第 1 轮的「旁白 · …」排在思考卡与工具卡之上，phone_device / phone_sh 各带耗时；状态条里缓存、本轮耗时、上下文各占一处，正文气泡只剩最终总结。</sub></p>
 
 ### 4）工具广度：一类任务一个工具
 
@@ -394,11 +402,6 @@ DLA 的 LLM 区与 Agent 区共用一套设置：`协议` + `Base URL` + `API Ke
 - **思考 → 调用 → 思考**：看门狗只让这一轮直接执行、下一轮恢复思考；截断的思考尾巴接回重试提示；预算 12K → 6K → 3K 自适应；同一轮重试不消耗轮数；`max_tokens` 只烧出思考时走同样恢复路径。
 - **thinking 块回传**：assistant 消息带回 thinking 块（含 signature），截断重试时补回中止前的思考，满足 DeepSeek / Anthropic 的硬要求。
 - **执行过程大卡 + 状态条**：所有「第 N 轮」收进一张可折叠大卡（运行中展开、结束折叠）；缓存命中率与本轮耗时单独一行。
-
-![3.6.0 真机：任务结束后的执行过程大卡与状态条](docs/assets/screenshot-process.png)
-
-<p align="center"><sub>3.6.0 真机：19 轮任务结束后「执行过程」自动折叠；状态条第一行是缓存 80% 与本轮 2m31s，第二行才是上下文占用。</sub></p>
-
 
 ### 3.5.0 打下的底子
 
